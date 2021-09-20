@@ -1,0 +1,22 @@
+[package]
+name = "hiberman"
+version = "0.1.0"
+authors = ["The Chromium OS Authors"]
+edition = "2018"
+default-run = "hiberman"
+
+[lib]
+name = "hiberman"
+path = "src/hiberman.rs"
+
+[[bin]]
+name = "hiberman"
+path = "src/main.rs"
+
+[profile.release]
+overflow-checks = true
+
+[dependencies]
+libc = "0.2.93"
+sys_util = { path = "../../platform/crosvm/sys_util" } # provided by ebuild
+thiserror = "1.0.20"
