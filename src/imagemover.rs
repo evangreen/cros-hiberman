@@ -5,9 +5,9 @@
 //! Implements support for moving an image from one fd to another, with alignment and transformation.
 
 use crate::hiberutil::{HibernateError, Result};
+use crate::{debug, error, info, warn};
 use libc::{self, loff_t};
 use std::io::{IoSliceMut, Read, Write};
-use sys_util::{debug, error, warn};
 
 // How should the buffer be aligned.
 static BUFFER_ALIGNMENT: usize = 4096;
@@ -99,8 +99,8 @@ impl<'a> ImageMover<'a> {
 
         let percent_done = (self.bytes_done * 100 / self.source_size) as u32;
         if (percent_done / 10) != (self.percent_reported / 10) {
-            debug!(
-                "Wrote {}%, {}/{}",
+            info!(
+                "Moved {}%, {}/{}",
                 percent_done, self.bytes_done, self.source_size
             );
             self.percent_reported = percent_done;

@@ -5,11 +5,11 @@
 //! Implement fiemap support, which can tell you the underlying disk extents backing a file.
 
 use crate::hiberutil::{any_as_u8_slice, HibernateError, Result};
+use crate::{debug, error};
 use libc::{c_ulong, c_void};
 use std::fs::File;
 use std::mem;
 use std::os::unix::io::AsRawFd;
-use sys_util::{debug, error};
 
 static FS_IOC_FIEMAP: c_ulong = 0xc020660b;
 

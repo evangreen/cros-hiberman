@@ -4,7 +4,7 @@
 
 //! Implement support for managing hibernate metadata.
 
-use crate::diskfile::DiskFile;
+use crate::diskfile::BouncedDiskFile;
 use crate::hiberutil::{any_as_u8_slice, HibernateError, Result};
 use std::io::{IoSliceMut, Read, Write};
 
@@ -54,7 +54,7 @@ impl HibernateMetadata {
         }
     }
 
-    pub fn load_from_disk(disk_file: &mut DiskFile) -> Result<Self> {
+    pub fn load_from_disk(disk_file: &mut BouncedDiskFile) -> Result<Self> {
         let mut buf = vec![0u8; 4096];
         let mut slice = [IoSliceMut::new(&mut buf)];
         let bytes_read = match disk_file.read_vectored(&mut slice) {
@@ -100,7 +100,7 @@ impl HibernateMetadata {
         Ok(metadata)
     }
 
-    pub fn write_to_disk(&self, disk_file: &mut DiskFile) -> Result<()> {
+    pub fn write_to_disk(&self, disk_file: &mut BouncedDiskFile) -> Result<()> {
         let mut buf = vec![0u8; 4096];
 
         // Check the flags being written in case somebody added a flag and
@@ -118,7 +118,6 @@ impl HibernateMetadata {
             buf[0..std::mem::size_of::<HibernateMetadata>()].copy_from_slice(any_as_u8_slice(self));
         }
 
-        //let slice = [IoSlice::new(&buf)];
         let bytes_written = match disk_file.write(&buf[..]) {
             Ok(s) => s,
             Err(e) => {

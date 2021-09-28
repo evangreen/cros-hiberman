@@ -4,8 +4,8 @@
 
 //! Coordinates suspend-to-disk activities
 
-use hiberman;
-use sys_util::{error, syslog};
+use hiberman::{self, error};
+use sys_util::syslog;
 
 fn print_usage(message: &str, error: bool) {
     if error {
@@ -13,6 +13,39 @@ fn print_usage(message: &str, error: bool) {
     } else {
         println!("{}", message);
     }
+}
+
+fn cat_usage(error: bool) {
+    let usage_msg = r#"Usage: hiberman cat <file> [file...]
+Print a disk file to stdout. Since disk files write to blocks
+underneath the file system, they cannot be read reliably by normal
+file system accesses.
+
+Option are:
+    --log -- This file is a log file (stop on first nul byte).
+    --help -- Print this help text.
+"#;
+
+    print_usage(usage_msg, error);
+}
+
+fn hiberman_cat(args: &mut std::env::Args) -> std::result::Result<(), ()> {
+    let mut log = false;
+    let mut result = Ok(());
+    for arg in args {
+        match arg.as_ref() {
+            "--log" => log = true,
+            "--help" => cat_usage(false),
+            _ => {
+                if let Err(e) = hiberman::cat_disk_file(&arg, log) {
+                    error!("Failed to cat {}: {}", &arg, e);
+                    result = Err(())
+                }
+            }
+        }
+    }
+
+    result
 }
 
 fn hibernate_usage(error: bool) {
@@ -109,6 +142,7 @@ Valid subcommands are:
     help -- Print this help text.
     hibernate -- Suspend the machine to disk now.
     resume -- Resume the system now.
+    cat -- Write a disk file contents to stdout.
 "#;
     print_usage(usage_msg, error);
 }
@@ -117,6 +151,11 @@ fn hiberman_main() -> std::result::Result<(), ()> {
     let mut args = std::env::args();
     if let Err(e) = syslog::init() {
         println!("failed to initialize syslog: {}", e);
+        return Err(());
+    }
+
+    if let Err(e) = hiberman::hiberlog::init() {
+        println!("failed to initialize hiberlog: {}", e);
         return Err(());
     }
 
@@ -141,6 +180,7 @@ fn hiberman_main() -> std::result::Result<(), ()> {
             app_usage(false);
             return Ok(());
         }
+        "cat" => hiberman_cat(&mut args),
         "hibernate" => hiberman_hibernate(&mut args),
         "resume" => hiberman_resume(&mut args),
         _ => {

@@ -29,18 +29,24 @@ pub enum HibernateError {
     /// Error getting the fiemap
     #[error("Error getting the fiemap: {0}")]
     FiemapError(sys_util::Error),
+    /// Failed to get physical memory size.
+    #[error("Failed to get the physical memory sizd")]
+    GetMemorySizeError(),
     /// Invalid fiemap
     #[error("Invalid fiemap: {0}")]
     InvalidFiemapError(String),
-    /// Failed to get physical memory size.
-    #[error("Failed to get the physical memory siz")]
-    GetMemorySizeError(),
+    /// Logger uninitialized.
+    #[error("Logger uninitialized")]
+    LoggerUninitialized(),
     /// Metadata error
     #[error("Metadata error: {0}")]
     MetadataError(String),
     /// Failed to lock process memory.
     #[error("Failed to mlockall: {0}")]
     MlockallError(sys_util::Error),
+    /// Poisoned
+    #[error("Poisoned")]
+    PoisonedError(),
     /// Failed to find the stateful mount.
     #[error("Failed to find the stateful mount")]
     RootdevError(String),

@@ -6,12 +6,110 @@
 
 use crate::fiemap::{Fiemap, FiemapExtent};
 use crate::hiberutil::{HibernateError, Result, HIBERNATE_MOUNT_ROOT};
+use crate::{debug, error, warn};
 use std::fs::{File, OpenOptions};
 use std::io::{
     prelude::*, BufReader, Error as IoError, ErrorKind, IoSlice, IoSliceMut, Read, Seek, SeekFrom,
     Write,
 };
-use sys_util::{debug, error, warn};
+use std::os::unix::fs::OpenOptionsExt;
+
+static DISK_FILE_ALIGNMENT: usize = 0x1000;
+
+pub struct BouncedDiskFile {
+    disk_file: DiskFile,
+    buf: Vec<u8>,
+    offset: usize,
+}
+
+impl BouncedDiskFile {
+    pub fn new(fs_file: &mut File, block_file: Option<File>) -> Result<BouncedDiskFile> {
+        let buf = vec![0u8; DISK_FILE_ALIGNMENT * 2];
+        let address = buf.as_ptr() as usize;
+        let offset = DISK_FILE_ALIGNMENT - (address & (DISK_FILE_ALIGNMENT - 1));
+        Ok(BouncedDiskFile {
+            disk_file: DiskFile::new(fs_file, block_file)?,
+            buf,
+            offset,
+        })
+    }
+
+    pub fn set_logging(&mut self, enable: bool) {
+        self.disk_file.set_logging(enable)
+    }
+
+    pub fn sync_all(&self) -> std::io::Result<()> {
+        self.disk_file.sync_all()
+    }
+}
+
+impl Read for BouncedDiskFile {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut offset = 0usize;
+        let length = buf.len();
+        while offset < length {
+            let mut size_this_round = DISK_FILE_ALIGNMENT;
+            if size_this_round > (length - offset) {
+                size_this_round = length - offset;
+            }
+
+            // Read into the aligned buffer.
+            let src_end = self.offset + size_this_round;
+            let mut slice = [IoSliceMut::new(&mut self.buf[self.offset..src_end])];
+            let bytes_done = self.disk_file.read_vectored(&mut slice)?;
+            if bytes_done == 0 {
+                break;
+            }
+
+            // Copy into the caller's buffer.
+            let src_end = self.offset + bytes_done;
+            let dst_end = offset + size_this_round;
+            buf[offset..dst_end].copy_from_slice(&self.buf[self.offset..src_end]);
+            offset += bytes_done;
+        }
+
+        Ok(offset)
+    }
+}
+
+impl Write for BouncedDiskFile {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut offset = 0usize;
+        let length = buf.len();
+        while offset < length {
+            let mut size_this_round = DISK_FILE_ALIGNMENT;
+            if size_this_round > (length - offset) {
+                size_this_round = length - offset;
+            }
+
+            // Copy into the aligned buffer.
+            let dst_end = self.offset + size_this_round;
+            let src_end = offset + size_this_round;
+            self.buf[self.offset..dst_end].copy_from_slice(&buf[offset..src_end]);
+
+            // Do the write.
+            let slice = [IoSlice::new(&self.buf[self.offset..dst_end])];
+            let bytes_done = self.disk_file.write_vectored(&slice)?;
+            if bytes_done == 0 {
+                break;
+            }
+
+            offset += bytes_done;
+        }
+
+        Ok(offset)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.disk_file.flush()
+    }
+}
+
+impl Seek for BouncedDiskFile {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.disk_file.seek(pos)
+    }
+}
 
 // A DiskFile can take in a preallocated file and read or write to it
 // by accessing the file blocks on disk directly. Operations are not buffered.
@@ -20,6 +118,7 @@ pub struct DiskFile {
     blockdev: File,
     current_position: u64,
     current_extent: FiemapExtent,
+    logging: bool,
 }
 
 impl DiskFile {
@@ -33,6 +132,7 @@ impl DiskFile {
                 blockdev = match OpenOptions::new()
                     .read(true)
                     .write(true)
+                    .custom_flags(libc::O_DIRECT)
                     .open(&blockdev_path)
                 {
                     Ok(f) => f,
@@ -53,6 +153,7 @@ impl DiskFile {
                 blockdev,
                 current_position: 0,
                 current_extent: std::mem::zeroed(),
+                logging: true,
             }
         };
 
@@ -64,6 +165,10 @@ impl DiskFile {
                 e,
             )),
         }
+    }
+
+    pub fn set_logging(&mut self, enable: bool) {
+        self.logging = enable;
     }
 
     pub fn sync_all(&self) -> std::io::Result<()> {
@@ -79,12 +184,17 @@ impl DiskFile {
 
 impl Drop for DiskFile {
     fn drop(&mut self) {
-        debug!(
-            "Dropping {} MB DiskFile",
-            self.fiemap.file_size / 1024 / 1024
-        );
+        if self.logging {
+            debug!(
+                "Dropping {} MB DiskFile",
+                self.fiemap.file_size / 1024 / 1024
+            );
+        }
+
         if let Err(e) = self.sync_all() {
-            error!("Error syncing DiskFile: {}", e);
+            if self.logging {
+                error!("Error syncing DiskFile: {}", e);
+            }
         }
     }
 }
@@ -118,13 +228,14 @@ impl Read for DiskFile {
             // the block device into the slice.
             let end = offset + this_io_length;
             let mut slice = [IoSliceMut::new(&mut buf[offset..end])];
-            //debug!("Reading {:x?} bytes @{:x?} {:x?}..{:x?}", this_io_length, self.current_position, offset, end);
             let bytes_done = self.blockdev.read_vectored(&mut slice)?;
             if bytes_done != this_io_length {
-                error!(
-                    "DiskFile only did {:x?}/{:x?} I/O",
-                    bytes_done, this_io_length
-                );
+                if self.logging {
+                    error!(
+                        "DiskFile only did {:x?}/{:x?} I/O",
+                        bytes_done, this_io_length
+                    );
+                }
             }
 
             self.current_position += bytes_done as u64;
@@ -167,13 +278,14 @@ impl Write for DiskFile {
             // the block device into the slice.
             let end = offset + this_io_length;
             let slice = [IoSlice::new(&buf[offset..end])];
-            //debug!("Writing {:x?} bytes @{:x?} {:x?}..{:x?}", this_io_length, self.current_position, offset, end);
             let bytes_done = self.blockdev.write_vectored(&slice)?;
             if bytes_done != this_io_length {
-                error!(
-                    "DiskFile only wrote {:x?}/{:x?} I/O",
-                    bytes_done, this_io_length
-                );
+                if self.logging {
+                    error!(
+                        "DiskFile only wrote {:x?}/{:x?} I/O",
+                        bytes_done, this_io_length
+                    );
+                }
             }
 
             self.current_position += bytes_done as u64;
@@ -218,7 +330,10 @@ impl Seek for DiskFile {
         self.current_position = pos;
         let delta = self.current_position - self.current_extent.fe_logical;
         let block_offset = self.current_extent.fe_physical + delta;
-        debug!("Seeking to {:x}", block_offset);
+        if self.logging {
+            debug!("Seeking to {:x}", block_offset);
+        }
+
         self.blockdev.seek(SeekFrom::Start(block_offset))
     }
 }

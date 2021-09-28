@@ -6,11 +6,13 @@
 
 mod diskfile;
 mod fiemap;
+pub mod hiberlog;
 mod hibermeta;
 mod hiberutil;
 mod imagemover;
 
-use diskfile::DiskFile;
+use diskfile::{BouncedDiskFile, DiskFile};
+use hiberlog::{flush_log, redirect_log, replay_log_file, reset_log, HiberlogOut};
 use hibermeta::{
     HibernateMetadata, HIBERNATE_META_FLAG_RESUMED, HIBERNATE_META_FLAG_RESUME_FAILED,
     HIBERNATE_META_FLAG_VALID,
@@ -20,17 +22,18 @@ use imagemover::ImageMover;
 use libc::{self, c_int, c_ulong, c_void, loff_t};
 use std::ffi::CString;
 use std::fs::{create_dir, metadata, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, IoSliceMut, Read, Seek, SeekFrom, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
-use sys_util::{debug, error, info, warn};
 
 static HIBERNATE_DIR: &str = "/mnt/stateful_partition/unencrypted/hibernate";
 static HIBER_META_NAME: &str = "metadata";
 static HIBER_META_SIZE: i64 = 1024 * 1024 * 8;
 static HIBER_DATA_NAME: &str = "hiberfile";
+static RESUME_LOG_FILE_NAME: &str = "resume_log";
+static SUSPEND_LOG_FILE_NAME: &str = "suspend_log";
 static SNAPSHOT_PATH: &str = "/dev/snapshot";
 static SWAPPINESS_PATH: &str = "/proc/sys/vm/swappiness";
 static SUSPEND_SWAPPINESS: i32 = 100;
@@ -39,9 +42,12 @@ static BUFFER_PAGES: usize = 32;
 // How low stateful free space is before we clean up the hiberfile after each
 // hibernate.
 static LOW_DISK_FREE_THRESHOLD: u64 = 10;
+// The size of the preallocated log files.
+static HIBER_LOG_SIZE: i64 = 1024 * 1024 * 4;
 
 // Define snapshot device ioctl numbers.
 static SNAPSHOT_FREEZE: c_ulong = 0x3301;
+static SNAPSHOT_UNFREEZE: c_ulong = 0x3302;
 static SNAPSHOT_ATOMIC_RESTORE: c_ulong = 0x3304;
 static SNAPSHOT_GET_IMAGE_SIZE: c_ulong = 0x8008330e;
 static SNAPSHOT_PLATFORM_SUPPORT: c_ulong = 0x330f;
@@ -107,10 +113,22 @@ fn preallocate_file(path: &Path, size: i64) -> Result<File> {
     Ok(file)
 }
 
-fn preallocate_metadata_file() -> Result<DiskFile> {
+fn preallocate_metadata_file() -> Result<BouncedDiskFile> {
     let metadata_path = Path::new(HIBERNATE_DIR).join(HIBER_META_NAME);
     let mut meta_file = preallocate_file(&metadata_path, HIBER_META_SIZE)?;
-    DiskFile::new(&mut meta_file, None)
+    BouncedDiskFile::new(&mut meta_file, None)
+}
+
+// Preallocate the suspend or resume log file.
+fn preallocate_log_file(suspend: bool) -> Result<BouncedDiskFile> {
+    let name = match suspend {
+        true => SUSPEND_LOG_FILE_NAME,
+        false => RESUME_LOG_FILE_NAME,
+    };
+
+    let log_file_path = Path::new(HIBERNATE_DIR).join(name);
+    let mut log_file = preallocate_file(&log_file_path, HIBER_LOG_SIZE)?;
+    BouncedDiskFile::new(&mut log_file, None)
 }
 
 fn preallocate_hiberfile() -> Result<DiskFile> {
@@ -141,6 +159,17 @@ fn open_disk_file(path: &Path) -> Result<DiskFile> {
     DiskFile::new(&mut file, None)
 }
 
+// Open a pre-existing disk file with bounce buffer,
+// still with read and write permissions.
+fn open_bounced_disk_file(path: &Path) -> Result<BouncedDiskFile> {
+    let mut file = match OpenOptions::new().read(true).write(true).open(path) {
+        Ok(f) => f,
+        Err(e) => return Err(HibernateError::OpenFileError(path.display().to_string(), e)),
+    };
+
+    BouncedDiskFile::new(&mut file, None)
+}
+
 // Open a pre-existing hiberfile, still with read and write permissions.
 fn open_hiberfile() -> Result<DiskFile> {
     let hiberfile_path = Path::new(HIBERNATE_DIR).join(HIBER_DATA_NAME);
@@ -148,9 +177,20 @@ fn open_hiberfile() -> Result<DiskFile> {
 }
 
 // Open a pre-existing hiberfile, still with read and write permissions.
-fn open_metafile() -> Result<DiskFile> {
+fn open_metafile() -> Result<BouncedDiskFile> {
     let hiberfile_path = Path::new(HIBERNATE_DIR).join(HIBER_META_NAME);
-    open_disk_file(&hiberfile_path)
+    open_bounced_disk_file(&hiberfile_path)
+}
+
+// Open one of the log files, either the suspend or resume log.
+fn open_log_file(suspend: bool) -> Result<BouncedDiskFile> {
+    let name = match suspend {
+        true => SUSPEND_LOG_FILE_NAME,
+        false => RESUME_LOG_FILE_NAME,
+    };
+
+    let path = Path::new(HIBERNATE_DIR).join(name);
+    open_bounced_disk_file(&path)
 }
 
 fn lock_process_memory() -> Result<()> {
@@ -272,13 +312,17 @@ fn open_snapshot(for_write: bool) -> Result<File> {
     }
 }
 
-fn freeze_userspace(snap_dev: &mut File) -> Result<()> {
-    info!("Freezing userspace");
-    let rc = unsafe { libc::ioctl(snap_dev.as_raw_fd(), SNAPSHOT_FREEZE, 0) };
+// Freeze or unfreeze userspace.
+fn freeze_userspace(snap_dev: &mut File, freeze: bool) -> Result<()> {
+    let (name, value) = match freeze {
+        true => ("FREEZE", SNAPSHOT_FREEZE),
+        false => ("UNFREEZE", SNAPSHOT_UNFREEZE),
+    };
+    let rc = unsafe { libc::ioctl(snap_dev.as_raw_fd(), value, 0) };
 
     if rc < 0 {
         return Err(HibernateError::SnapshotIoctlError(
-            "FREEZE".to_string(),
+            name.to_string(),
             sys_util::Error::last(),
         ));
     }
@@ -419,29 +463,87 @@ fn read_image(
     Ok(())
 }
 
-fn suspend_system(mut hiber_file: DiskFile, mut meta_file: DiskFile, dry_run: bool) -> Result<()> {
-    let mut metadata = HibernateMetadata::new();
-    let mut snap_dev = open_snapshot(false)?;
-    freeze_userspace(&mut snap_dev)?;
-    set_platform_mode(&mut snap_dev, false)?;
-    if atomic_snapshot(&mut snap_dev)? {
-        // Suspend path. Everything after this point is invisible to the hibernated kernel.
-        write_image(&mut snap_dev, &mut hiber_file, &mut metadata)?;
+fn snapshot_and_save(
+    mut hiber_file: DiskFile,
+    mut meta_file: BouncedDiskFile,
+    snap_dev: &mut File,
+    mut metadata: HibernateMetadata,
+    dry_run: bool,
+) -> Result<()> {
+    set_platform_mode(snap_dev, false)?;
+    // This is where the suspend path and resume path fork. On success,
+    // both halves of these conditions execute, just at different times.
+    if atomic_snapshot(snap_dev)? {
+        // Suspend path. Everything after this point is invisible to the
+        // hibernated kernel.
+        write_image(snap_dev, &mut hiber_file, &mut metadata)?;
         drop(hiber_file);
         metadata.write_to_disk(&mut meta_file)?;
         drop(meta_file);
         if dry_run {
             info!("Not powering off due to dry run");
+            for i in 0..1024 {
+                info!("Extra log {}", i);
+            }
         } else {
             info!("Powering off");
-            snapshot_power_off(&mut snap_dev)?;
+        }
+
+        // Flush out the hibernate log, and instead keep logs in memory.
+        // Any logs beyond here are lost upon powerdown.
+        flush_log();
+        redirect_log(HiberlogOut::BufferInMemory, None);
+
+        // Power the thing down.
+        if !dry_run {
+            snapshot_power_off(snap_dev)?;
             error!("Returned from power off");
         }
     } else {
+        // This is the resume path. First, forcefully reset the logger, which is some
+        // stale partial state that the suspend path ultimately flushed and closed.
+        // Keep logs in memory for now.
+        reset_log();
+        redirect_log(HiberlogOut::BufferInMemory, None);
         info!("Resumed from hibernate");
     }
 
     Ok(())
+}
+
+fn suspend_system(hiber_file: DiskFile, meta_file: BouncedDiskFile, dry_run: bool) -> Result<()> {
+    let metadata = HibernateMetadata::new();
+    let mut snap_dev = open_snapshot(false)?;
+    info!("Freezing userspace");
+    freeze_userspace(&mut snap_dev, true)?;
+    let mut result = snapshot_and_save(hiber_file, meta_file, &mut snap_dev, metadata, dry_run);
+    let freeze_result = freeze_userspace(&mut snap_dev, false);
+    // Fail an otherwise happy suspend for failing to unfreeze, but don't
+    // clobber an earlier error, as this is likely a downstream symptom.
+    if freeze_result.is_err() && result.is_ok() {
+        result = freeze_result;
+    }
+    result
+}
+
+fn replay_logs(push_resume_logs: bool) {
+    // Push the hibernate logs that were taking after the snapshot (and
+    // therefore after syslog became frozen) back into the syslog now.
+    // These should be there on both success and failure cases.
+    match open_log_file(true) {
+        Ok(mut f) => replay_log_file(&mut f, "suspend log"),
+        Err(e) => warn!("Failed to open suspend log: {}", e),
+    }
+
+    // If successfully resumed from hibernate, or in the bootstrapping kernel
+    // after a failed resume attempt, also gather the resume logs
+    // saved by the bootstrapping kernel.
+    if push_resume_logs {
+        match open_log_file(false) {
+            Ok(mut f) => replay_log_file(&mut f, "resume log"),
+            Err(e) => warn!("Failed to open resume log: {}", e),
+        }
+    }
 }
 
 fn delete_data_if_disk_full(fs_stats: libc::statvfs) -> Result<()> {
@@ -456,42 +558,76 @@ fn delete_data_if_disk_full(fs_stats: libc::statvfs) -> Result<()> {
     Ok(())
 }
 
+fn launch_resume_image(
+    mut meta_file: BouncedDiskFile,
+    mut metadata: HibernateMetadata,
+    snap_dev: &mut File,
+) -> Result<()> {
+    // Clear the valid flag and set the resume flag to indicate this image was resumed into.
+    metadata.flags &= !HIBERNATE_META_FLAG_VALID;
+    metadata.flags |= HIBERNATE_META_FLAG_RESUMED;
+    metadata.write_to_disk(&mut meta_file)?;
+    if let Err(e) = meta_file.sync_all() {
+        return Err(HibernateError::FileSyncError(
+            "Failed to sync metafile".to_string(),
+            e,
+        ));
+    }
+
+    // Jump into the restore image. This resumes execution in the lower
+    // portion of suspend_system() on success. Flush and stop the logging
+    // before control is lost.
+    info!("Launching resume image");
+
+    // Flush out any pending resume logs, closing out the resume log file.
+    flush_log();
+    // Keep logs in memory for now.
+    redirect_log(HiberlogOut::BufferInMemory, None);
+    let result = atomic_restore(snap_dev);
+    error!("Resume failed");
+    // If we are still executing then the resume failed. Mark it as such.
+    metadata.flags |= HIBERNATE_META_FLAG_RESUME_FAILED;
+    metadata.write_to_disk(&mut meta_file)?;
+    result
+}
+
 fn resume_system(
     dry_run: bool,
     mut hiber_file: DiskFile,
-    mut meta_file: DiskFile,
+    meta_file: BouncedDiskFile,
     mut metadata: HibernateMetadata,
 ) -> Result<()> {
+    // Divert away from syslog early to maximize logs that get pushed
+    // into the resumed kernel.
+    let mut log_file = open_log_file(false)?;
+    // Don't allow the logfile to log as it creates a deadlock.
+    log_file.set_logging(false);
+    // Start logging to the resume logger.
+    redirect_log(HiberlogOut::File, Some(Box::new(log_file)));
     let mut snap_dev = open_snapshot(true)?;
     set_platform_mode(&mut snap_dev, false)?;
     read_image(&mut snap_dev, &mut hiber_file, &mut metadata)?;
-    freeze_userspace(&mut snap_dev)?;
+    info!("Freezing userspace");
+    freeze_userspace(&mut snap_dev, true)?;
     drop(hiber_file);
+    let result;
     if dry_run {
         info!("Not launching resume image: in a dry run.");
-        Ok(())
+        // Flush the resume file logs.
+        flush_log();
+        // Keep logs in memory, like launch_resume_image() does.
+        redirect_log(HiberlogOut::BufferInMemory, None);
+        result = Ok(())
     } else {
-        // Clear the valid flag and set the resume flag to indicate this image was resumed into.
-        metadata.flags &= !HIBERNATE_META_FLAG_VALID;
-        metadata.flags |= HIBERNATE_META_FLAG_RESUMED;
-        metadata.write_to_disk(&mut meta_file)?;
-        if let Err(e) = meta_file.sync_all() {
-            return Err(HibernateError::FileSyncError(
-                "Failed to sync metafile".to_string(),
-                e,
-            ));
-        }
-
-        // Jump into the restore image. This resumes execution in the lower
-        // portion of suspend_system() on success.
-        info!("Launching resume image");
-        let result = atomic_restore(&mut snap_dev);
-        error!("Resume failed");
-        // If we are still executing then the resume failed. Mark it as such.
-        metadata.flags |= HIBERNATE_META_FLAG_RESUME_FAILED;
-        metadata.write_to_disk(&mut meta_file)?;
-        result
+        result = launch_resume_image(meta_file, metadata, &mut snap_dev);
     }
+
+    info!("Unfreezing userspace");
+    if let Err(e) = freeze_userspace(&mut snap_dev, false) {
+        error!("Failed to unfreeze userspace: {}", e);
+    }
+
+    result
 }
 
 pub fn hibernate(dry_run: bool) -> Result<()> {
@@ -508,24 +644,38 @@ pub fn hibernate(dry_run: bool) -> Result<()> {
 
     let meta_file = preallocate_metadata_file()?;
     let hiber_file = preallocate_hiberfile()?;
+    // The resume log file needs to be preallocated now before the
+    // snapshot is taken, though it's not used here.
+    preallocate_log_file(false)?;
+    let mut log_file = preallocate_log_file(true)?;
+    // Don't allow the logfile to log as it creates a deadlock.
+    log_file.set_logging(false);
     let fs_stats = get_fs_stats(Path::new(HIBERNATE_DIR))?;
     lock_process_memory()?;
     let mut swappiness = save_swappiness()?;
     write_swappiness(&mut swappiness.file, SUSPEND_SWAPPINESS)?;
+    // Stop logging to syslog, and divert instead to a file since the
+    // logging daemon's about to be frozen.
+    redirect_log(HiberlogOut::File, Some(Box::new(log_file)));
     debug!("Syncing filesystems");
     unsafe {
         libc::sync();
     }
 
     let result = suspend_system(hiber_file, meta_file, dry_run);
-    // After resume or a failed suspend attempt.
     unlock_process_memory();
+    // Replay logs first because they happened earlier.
+    replay_logs(result.is_ok() && !dry_run);
+    // Now send any remaining logs and future logs to syslog.
+    redirect_log(HiberlogOut::Syslog, None);
     delete_data_if_disk_full(fs_stats)?;
     result
 }
 
 pub fn resume(dry_run: bool) -> Result<()> {
     info!("Beginning resume");
+    // Start keeping logs in memory, anticipating success.
+    redirect_log(HiberlogOut::BufferInMemory, None);
     let mut meta_file = open_metafile()?;
     debug!("Loading metadata");
     let metadata = HibernateMetadata::load_from_disk(&mut meta_file)?;
@@ -534,10 +684,59 @@ pub fn resume(dry_run: bool) -> Result<()> {
             "No valid hibernate image".to_string(),
         ));
     }
+
     debug!("Opening hiberfile");
     let hiber_file = open_hiberfile()?;
     lock_process_memory()?;
     let result = resume_system(dry_run, hiber_file, meta_file, metadata);
     unlock_process_memory();
+    // Replay earlier logs first.
+    replay_logs(true);
+    // Then move pending and future logs to syslog.
+    redirect_log(HiberlogOut::Syslog, None);
     result
+}
+
+pub fn cat_disk_file(path_str: &str, is_log: bool) -> Result<()> {
+    let path = Path::new(path_str);
+    let mut file = open_bounced_disk_file(path)?;
+    let mut stdout = std::io::stdout();
+    if is_log {
+        let mut reader = BufReader::new(file);
+        let mut buf = Vec::<u8>::new();
+        if let Err(e) = reader.read_until(0, &mut buf) {
+            warn!("Failed to read log file: {}", e);
+            return Err(HibernateError::FileIoError("Failed to read".to_string(), e));
+        }
+
+        if let Err(e) = stdout.write(&buf) {
+            return Err(HibernateError::FileIoError(
+                "Failed to write".to_string(),
+                e,
+            ));
+        }
+    } else {
+        let mut buf = vec![0u8; 4096];
+
+        loop {
+            let mut slice = [IoSliceMut::new(&mut buf)];
+            let bytes_read = match file.read_vectored(&mut slice) {
+                Ok(s) => s,
+                Err(e) => return Err(HibernateError::FileIoError("Failed to read".to_string(), e)),
+            };
+
+            if bytes_read == 0 {
+                break;
+            }
+
+            if let Err(e) = stdout.write(&buf[..bytes_read]) {
+                return Err(HibernateError::FileIoError(
+                    "Failed to write".to_string(),
+                    e,
+                ));
+            }
+        }
+    }
+
+    Ok(())
 }
