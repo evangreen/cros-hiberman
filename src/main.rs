@@ -15,6 +15,92 @@ fn print_usage(message: &str, error: bool) {
     }
 }
 
+fn init_logging() -> std::result::Result<(), ()> {
+    if let Err(e) = syslog::init() {
+        eprintln!("failed to initialize syslog: {}", e);
+        return Err(());
+    }
+
+    if let Err(e) = hiberman::hiberlog::init() {
+        eprintln!("failed to initialize hiberlog: {}", e);
+        return Err(());
+    }
+
+    Ok(())
+}
+
+fn cookie_usage(error: bool) {
+    let usage_msg = r#"Usage: hiberman cookie <path> [options]
+Get or set the hibernate cookie info. With no options, gets the
+current status of the hibernate cookie. Returns 0 if the cookie
+indicates a valid hibernate image, or 1 if no image.
+
+Option are:
+    --set -- Set the cookie to indicate a valid hibernate image.
+    --clear -- Clear the cookie to indicate no valid hibernate image.
+    --verbose -- Print more, including for "get" operations the status
+      of the cookie.
+    --help -- Print this help text.
+"#;
+
+    print_usage(usage_msg, error);
+}
+
+fn hiberman_cookie(args: &mut std::env::Args) -> std::result::Result<(), ()> {
+    // Note: Don't fire up logging immediately in this command as it's called
+    // during very early init, before syslog is ready.
+    let mut clear_cookie = false;
+    let mut set_cookie = false;
+    let mut path = None;
+    let mut verbose = false;
+    for arg in args {
+        match arg.as_ref() {
+            "--verbose" => verbose = true,
+            "--set" => set_cookie = true,
+            "--clear" => clear_cookie = true,
+            "--help" => cookie_usage(false),
+            _ => {
+                path = Some(arg);
+            }
+        }
+    }
+
+    // In verbose mode, or for anything other than "get", fire up logging.
+    if verbose || set_cookie || clear_cookie {
+        init_logging()?;
+    }
+
+    if set_cookie || clear_cookie {
+        match hiberman::cookie::set_hibernate_cookie(path.as_ref(), set_cookie) {
+            Err(e) => {
+                error!("Failed to write hibernate cookie: {}", e);
+                Err(())
+            }
+            Ok(()) => Ok(()),
+        }
+    } else {
+        match hiberman::cookie::get_hibernate_cookie(path.as_ref()) {
+            Err(e) => {
+                error!("Failed to get hibernate cookie: {}", e);
+                Err(())
+            }
+            Ok(is_set) => {
+                if verbose {
+                    match is_set {
+                        true => println!("Hibernate cookie is set"),
+                        false => println!("Hibernate cookie is not set"),
+                    }
+                }
+
+                match is_set {
+                    true => Ok(()),
+                    false => Err(()),
+                }
+            }
+        }
+    }
+}
+
 fn cat_usage(error: bool) {
     let usage_msg = r#"Usage: hiberman cat <file> [file...]
 Print a disk file to stdout. Since disk files write to blocks
@@ -30,6 +116,7 @@ Option are:
 }
 
 fn hiberman_cat(args: &mut std::env::Args) -> std::result::Result<(), ()> {
+    init_logging()?;
     let mut log = false;
     let mut result = Ok(());
     for arg in args {
@@ -65,6 +152,7 @@ Options are:
 }
 
 fn hiberman_hibernate(args: &mut std::env::Args) -> std::result::Result<(), ()> {
+    init_logging()?;
     let mut dry_run = false;
     for arg in args {
         match arg.as_ref() {
@@ -106,6 +194,7 @@ Options are:
 }
 
 fn hiberman_resume(args: &mut std::env::Args) -> std::result::Result<(), ()> {
+    init_logging()?;
     let mut dry_run = false;
     for arg in args {
         match arg.as_ref() {
@@ -143,31 +232,22 @@ Valid subcommands are:
     hibernate -- Suspend the machine to disk now.
     resume -- Resume the system now.
     cat -- Write a disk file contents to stdout.
+    cookie -- Read or write the hibernate cookie.
 "#;
     print_usage(usage_msg, error);
 }
 
 fn hiberman_main() -> std::result::Result<(), ()> {
     let mut args = std::env::args();
-    if let Err(e) = syslog::init() {
-        println!("failed to initialize syslog: {}", e);
-        return Err(());
-    }
-
-    if let Err(e) = hiberman::hiberlog::init() {
-        println!("failed to initialize hiberlog: {}", e);
-        return Err(());
-    }
-
     if args.next().is_none() {
-        error!("expected executable name.");
+        eprintln!("expected executable name.");
         return Err(());
     }
 
     let subcommand = match args.next() {
         Some(subcommand) => subcommand,
         None => {
-            error!("expected a subcommand");
+            eprintln!("expected a subcommand");
             return Err(());
         }
     };
@@ -181,6 +261,7 @@ fn hiberman_main() -> std::result::Result<(), ()> {
             return Ok(());
         }
         "cat" => hiberman_cat(&mut args),
+        "cookie" => hiberman_cookie(&mut args),
         "hibernate" => hiberman_hibernate(&mut args),
         "resume" => hiberman_resume(&mut args),
         _ => {

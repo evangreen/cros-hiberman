@@ -4,13 +4,13 @@
 
 //! Implements support for moving an image from one fd to another, with alignment and transformation.
 
-use crate::hiberutil::{HibernateError, Result};
+use crate::hiberutil::{buffer_alignment_offset, HibernateError, Result, DIRECT_IO_ALIGNMENT};
 use crate::{debug, error, info, warn};
 use libc::{self, loff_t};
 use std::io::{IoSliceMut, Read, Write};
 
 // How should the buffer be aligned.
-static BUFFER_ALIGNMENT: usize = 4096;
+static BUFFER_ALIGNMENT: usize = DIRECT_IO_ALIGNMENT;
 
 pub struct ImageMover<'a> {
     source_file: &'a mut dyn Read,
@@ -44,8 +44,7 @@ impl<'a> ImageMover<'a> {
         }
 
         let buffer = vec![0u8; buffer_size + BUFFER_ALIGNMENT];
-        let address = buffer.as_ptr() as usize;
-        let buffer_align = BUFFER_ALIGNMENT - (address & (BUFFER_ALIGNMENT - 1));
+        let buffer_align = buffer_alignment_offset(&buffer, BUFFER_ALIGNMENT);
         Self {
             source_file,
             dest_file,

@@ -5,16 +5,15 @@
 //! Implement support for accessing file contents directly via the underlying block device.
 
 use crate::fiemap::{Fiemap, FiemapExtent};
-use crate::hiberutil::{HibernateError, Result, HIBERNATE_MOUNT_ROOT};
-use crate::{debug, error, warn};
-use std::fs::{File, OpenOptions};
-use std::io::{
-    prelude::*, BufReader, Error as IoError, ErrorKind, IoSlice, IoSliceMut, Read, Seek, SeekFrom,
-    Write,
+use crate::hiberutil::{
+    buffer_alignment_offset, path_to_stateful_part, HibernateError, Result, DIRECT_IO_ALIGNMENT,
 };
+use crate::{debug, error};
+use std::fs::{File, OpenOptions};
+use std::io::{Error as IoError, ErrorKind, IoSlice, IoSliceMut, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::OpenOptionsExt;
 
-static DISK_FILE_ALIGNMENT: usize = 0x1000;
+static DISK_FILE_ALIGNMENT: usize = DIRECT_IO_ALIGNMENT;
 
 pub struct BouncedDiskFile {
     disk_file: DiskFile,
@@ -25,8 +24,7 @@ pub struct BouncedDiskFile {
 impl BouncedDiskFile {
     pub fn new(fs_file: &mut File, block_file: Option<File>) -> Result<BouncedDiskFile> {
         let buf = vec![0u8; DISK_FILE_ALIGNMENT * 2];
-        let address = buf.as_ptr() as usize;
-        let offset = DISK_FILE_ALIGNMENT - (address & (DISK_FILE_ALIGNMENT - 1));
+        let offset = buffer_alignment_offset(&buf, DISK_FILE_ALIGNMENT);
         Ok(BouncedDiskFile {
             disk_file: DiskFile::new(fs_file, block_file)?,
             buf,
@@ -127,7 +125,7 @@ impl DiskFile {
         let blockdev;
         match block_file {
             None => {
-                let blockdev_path = path_to_bdev()?;
+                let blockdev_path = path_to_stateful_part()?;
                 debug!("Found hibernate block device: {}", blockdev_path);
                 blockdev = match OpenOptions::new()
                     .read(true)
@@ -336,40 +334,4 @@ impl Seek for DiskFile {
 
         self.blockdev.seek(SeekFrom::Start(block_offset))
     }
-}
-
-// Return the underlying partition device the hibernate files reside on.
-fn path_to_bdev() -> Result<String> {
-    let mounts_file = match File::open("/proc/mounts") {
-        Ok(f) => f,
-        Err(e) => return Err(HibernateError::OpenFileError("/proc/mounts".to_string(), e)),
-    };
-
-    let reader = BufReader::new(mounts_file);
-
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => {
-                return Err(HibernateError::RootdevError(
-                    "Failed to get line".to_string(),
-                ))
-            }
-        };
-
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        if fields.len() < 3 {
-            warn!("Found unexpected line in /proc/mounts: {}", line);
-            continue;
-        }
-
-        if fields[1] == HIBERNATE_MOUNT_ROOT {
-            return Ok(fields[0].to_string());
-        }
-    }
-
-    return Err(HibernateError::RootdevError(format!(
-        "No mount found for {}",
-        HIBERNATE_MOUNT_ROOT
-    )));
 }

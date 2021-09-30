@@ -4,6 +4,7 @@
 
 //! Implement hibernate functionality
 
+pub mod cookie;
 mod diskfile;
 mod fiemap;
 pub mod hiberlog;
@@ -11,13 +12,14 @@ mod hibermeta;
 mod hiberutil;
 mod imagemover;
 
+use cookie::{get_hibernate_cookie, set_hibernate_cookie};
 use diskfile::{BouncedDiskFile, DiskFile};
 use hiberlog::{flush_log, redirect_log, replay_log_file, reset_log, HiberlogOut};
 use hibermeta::{
     HibernateMetadata, HIBERNATE_META_FLAG_RESUMED, HIBERNATE_META_FLAG_RESUME_FAILED,
     HIBERNATE_META_FLAG_VALID,
 };
-use hiberutil::{HibernateError, Result};
+use hiberutil::{path_to_stateful_block, HibernateError, Result};
 use imagemover::ImageMover;
 use libc::{self, c_int, c_ulong, c_void, loff_t};
 use std::ffi::CString;
@@ -470,6 +472,7 @@ fn snapshot_and_save(
     mut metadata: HibernateMetadata,
     dry_run: bool,
 ) -> Result<()> {
+    let block_path = path_to_stateful_block()?;
     set_platform_mode(snap_dev, false)?;
     // This is where the suspend path and resume path fork. On success,
     // both halves of these conditions execute, just at different times.
@@ -480,11 +483,11 @@ fn snapshot_and_save(
         drop(hiber_file);
         metadata.write_to_disk(&mut meta_file)?;
         drop(meta_file);
+        // Set the hibernate cookie so the next boot knows to start in RO mode.
+        info!("Setting hibernate cookie at {}", block_path);
+        set_hibernate_cookie(Some(&block_path), true)?;
         if dry_run {
             info!("Not powering off due to dry run");
-            for i in 0..1024 {
-                info!("Extra log {}", i);
-            }
         } else {
             info!("Powering off");
         }
@@ -499,6 +502,10 @@ fn snapshot_and_save(
             snapshot_power_off(snap_dev)?;
             error!("Returned from power off");
         }
+
+        // Unset the hibernate cookie.
+        info!("Unsetting hibernate cookie at {}", block_path);
+        set_hibernate_cookie(Some(&block_path), false)?;
     } else {
         // This is the resume path. First, forcefully reset the logger, which is some
         // stale partial state that the suspend path ultimately flushed and closed.
@@ -676,6 +683,11 @@ pub fn resume(dry_run: bool) -> Result<()> {
     info!("Beginning resume");
     // Start keeping logs in memory, anticipating success.
     redirect_log(HiberlogOut::BufferInMemory, None);
+    // Clear the cookie near the start to avoid situations where we repeatedly
+    // try to resume but fail.
+    let block_path = path_to_stateful_block()?;
+    info!("Clearing hibernate cookie at {}", block_path);
+    set_hibernate_cookie(Some(&block_path), false)?;
     let mut meta_file = open_metafile()?;
     debug!("Loading metadata");
     let metadata = HibernateMetadata::load_from_disk(&mut meta_file)?;
