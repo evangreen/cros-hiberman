@@ -4,13 +4,10 @@
 
 //! Implement common functions and definitions used throughout the app and library.
 
-use crate::{error, warn};
-use std::fs::File;
-use std::io::{prelude::*, BufReader};
+use crate::error;
+use std::process::Command;
 use thiserror::Error as ThisError;
 
-// Define the mount location where the hibernate data is located.
-pub static HIBERNATE_MOUNT_ROOT: &str = "/mnt/stateful_partition";
 // Define the alignment needed for direct I/O.
 pub static DIRECT_IO_ALIGNMENT: usize = 0x1000;
 
@@ -56,7 +53,7 @@ pub enum HibernateError {
     #[error("Poisoned")]
     PoisonedError(),
     /// Failed to find the stateful mount.
-    #[error("Failed to find the stateful mount")]
+    #[error("Failed to find the stateful mount: {0}")]
     RootdevError(String),
     /// Snapshot device error.
     #[error("Snapshot device error: {0}")]
@@ -92,50 +89,24 @@ pub fn buffer_alignment_offset(buf: &Vec<u8>, alignment: usize) -> usize {
 }
 
 // Return the underlying partition device the hibernate files reside on.
+// Note: this still needs to return the real partition, even if stateful
+// is mounted on a dm-snapshot. Otherwise, resume activities won't work
+// across the transition.
 pub fn path_to_stateful_part() -> Result<String> {
-    let mounts_file = match File::open("/proc/mounts") {
-        Ok(f) => f,
-        Err(e) => return Err(HibernateError::OpenFileError("/proc/mounts".to_string(), e)),
-    };
-
-    let reader = BufReader::new(mounts_file);
-
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => {
-                return Err(HibernateError::RootdevError(
-                    "Failed to get line".to_string(),
-                ))
-            }
-        };
-
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        if fields.len() < 3 {
-            warn!("Found unexpected line in /proc/mounts: {}", line);
-            continue;
-        }
-
-        if fields[1] == HIBERNATE_MOUNT_ROOT {
-            return Ok(fields[0].to_string());
-        }
-    }
-
-    return Err(HibernateError::RootdevError(format!(
-        "No mount found for {}",
-        HIBERNATE_MOUNT_ROOT
-    )));
+    let rootdev = path_to_stateful_block()?;
+    Ok(format!("{}p1", rootdev))
 }
 
 pub fn path_to_stateful_block() -> Result<String> {
-    let part_path = path_to_stateful_part()?;
-    if !part_path.ends_with("p1") {
-        return Err(HibernateError::RootdevError(format!(
-            "Partition did not end in p1: {}",
-            part_path
-        )));
-    }
+    let output = match Command::new("/usr/bin/rootdev").arg("-d").output() {
+        Ok(o) => o,
+        Err(e) => {
+            return Err(HibernateError::RootdevError(format!(
+                "Failed to get rootdev: {}",
+                e
+            )))
+        }
+    };
 
-    let end = part_path.len() - 2;
-    return Ok(String::from(&part_path[..end]));
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }

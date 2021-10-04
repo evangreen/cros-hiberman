@@ -12,7 +12,7 @@ mod hibermeta;
 mod hiberutil;
 mod imagemover;
 
-use cookie::{get_hibernate_cookie, set_hibernate_cookie};
+use cookie::set_hibernate_cookie;
 use diskfile::{BouncedDiskFile, DiskFile};
 use hiberlog::{flush_log, redirect_log, replay_log_file, reset_log, HiberlogOut};
 use hibermeta::{
@@ -679,15 +679,13 @@ pub fn hibernate(dry_run: bool) -> Result<()> {
     result
 }
 
-pub fn resume(dry_run: bool) -> Result<()> {
-    info!("Beginning resume");
-    // Start keeping logs in memory, anticipating success.
-    redirect_log(HiberlogOut::BufferInMemory, None);
+pub fn resume_inner(dry_run: bool) -> Result<()> {
     // Clear the cookie near the start to avoid situations where we repeatedly
     // try to resume but fail.
     let block_path = path_to_stateful_block()?;
-    info!("Clearing hibernate cookie at {}", block_path);
+    info!("Clearing hibernate cookie at '{}'", block_path);
     set_hibernate_cookie(Some(&block_path), false)?;
+    info!("Cleared cookie");
     let mut meta_file = open_metafile()?;
     debug!("Loading metadata");
     let metadata = HibernateMetadata::load_from_disk(&mut meta_file)?;
@@ -702,6 +700,14 @@ pub fn resume(dry_run: bool) -> Result<()> {
     lock_process_memory()?;
     let result = resume_system(dry_run, hiber_file, meta_file, metadata);
     unlock_process_memory();
+    result
+}
+
+pub fn resume(dry_run: bool) -> Result<()> {
+    info!("Beginning resume");
+    // Start keeping logs in memory, anticipating success.
+    redirect_log(HiberlogOut::BufferInMemory, None);
+    let result = resume_inner(dry_run);
     // Replay earlier logs first.
     replay_logs(true);
     // Then move pending and future logs to syslog.
