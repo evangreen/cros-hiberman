@@ -20,6 +20,7 @@ use hibermeta::{
     HIBERNATE_META_FLAG_VALID,
 };
 use hiberutil::{path_to_stateful_block, HibernateError, Result};
+pub use hiberutil::{HibernateOptions, ResumeOptions};
 use imagemover::ImageMover;
 use libc::{self, c_int, c_ulong, c_void, loff_t};
 use std::ffi::CString;
@@ -470,7 +471,7 @@ fn snapshot_and_save(
     mut meta_file: BouncedDiskFile,
     snap_dev: &mut File,
     mut metadata: HibernateMetadata,
-    dry_run: bool,
+    options: &HibernateOptions,
 ) -> Result<()> {
     let block_path = path_to_stateful_block()?;
     set_platform_mode(snap_dev, false)?;
@@ -486,7 +487,7 @@ fn snapshot_and_save(
         // Set the hibernate cookie so the next boot knows to start in RO mode.
         info!("Setting hibernate cookie at {}", block_path);
         set_hibernate_cookie(Some(&block_path), true)?;
-        if dry_run {
+        if options.dry_run {
             info!("Not powering off due to dry run");
         } else {
             info!("Powering off");
@@ -498,7 +499,7 @@ fn snapshot_and_save(
         redirect_log(HiberlogOut::BufferInMemory, None);
 
         // Power the thing down.
-        if !dry_run {
+        if !options.dry_run {
             snapshot_power_off(snap_dev)?;
             error!("Returned from power off");
         }
@@ -518,12 +519,16 @@ fn snapshot_and_save(
     Ok(())
 }
 
-fn suspend_system(hiber_file: DiskFile, meta_file: BouncedDiskFile, dry_run: bool) -> Result<()> {
+fn suspend_system(
+    hiber_file: DiskFile,
+    meta_file: BouncedDiskFile,
+    options: &HibernateOptions,
+) -> Result<()> {
     let metadata = HibernateMetadata::new();
     let mut snap_dev = open_snapshot(false)?;
     info!("Freezing userspace");
     freeze_userspace(&mut snap_dev, true)?;
-    let mut result = snapshot_and_save(hiber_file, meta_file, &mut snap_dev, metadata, dry_run);
+    let mut result = snapshot_and_save(hiber_file, meta_file, &mut snap_dev, metadata, options);
     let freeze_result = freeze_userspace(&mut snap_dev, false);
     // Fail an otherwise happy suspend for failing to unfreeze, but don't
     // clobber an earlier error, as this is likely a downstream symptom.
@@ -599,7 +604,7 @@ fn launch_resume_image(
 }
 
 fn resume_system(
-    dry_run: bool,
+    options: &ResumeOptions,
     mut hiber_file: DiskFile,
     meta_file: BouncedDiskFile,
     mut metadata: HibernateMetadata,
@@ -618,7 +623,7 @@ fn resume_system(
     freeze_userspace(&mut snap_dev, true)?;
     drop(hiber_file);
     let result;
-    if dry_run {
+    if options.dry_run {
         info!("Not launching resume image: in a dry run.");
         // Flush the resume file logs.
         flush_log();
@@ -637,7 +642,7 @@ fn resume_system(
     result
 }
 
-pub fn hibernate(dry_run: bool) -> Result<()> {
+pub fn hibernate(options: &HibernateOptions) -> Result<()> {
     info!("Beginning hibernate");
     if !Path::new(HIBERNATE_DIR).exists() {
         debug!("Creating hibernate directory");
@@ -669,17 +674,17 @@ pub fn hibernate(dry_run: bool) -> Result<()> {
         libc::sync();
     }
 
-    let result = suspend_system(hiber_file, meta_file, dry_run);
+    let result = suspend_system(hiber_file, meta_file, options);
     unlock_process_memory();
     // Replay logs first because they happened earlier.
-    replay_logs(result.is_ok() && !dry_run);
+    replay_logs(result.is_ok() && !options.dry_run);
     // Now send any remaining logs and future logs to syslog.
     redirect_log(HiberlogOut::Syslog, None);
     delete_data_if_disk_full(fs_stats)?;
     result
 }
 
-pub fn resume_inner(dry_run: bool) -> Result<()> {
+pub fn resume_inner(options: &ResumeOptions) -> Result<()> {
     // Clear the cookie near the start to avoid situations where we repeatedly
     // try to resume but fail.
     let block_path = path_to_stateful_block()?;
@@ -698,16 +703,16 @@ pub fn resume_inner(dry_run: bool) -> Result<()> {
     debug!("Opening hiberfile");
     let hiber_file = open_hiberfile()?;
     lock_process_memory()?;
-    let result = resume_system(dry_run, hiber_file, meta_file, metadata);
+    let result = resume_system(options, hiber_file, meta_file, metadata);
     unlock_process_memory();
     result
 }
 
-pub fn resume(dry_run: bool) -> Result<()> {
+pub fn resume(options: &ResumeOptions) -> Result<()> {
     info!("Beginning resume");
     // Start keeping logs in memory, anticipating success.
     redirect_log(HiberlogOut::BufferInMemory, None);
-    let result = resume_inner(dry_run);
+    let result = resume_inner(options);
     // Replay earlier logs first.
     replay_logs(true);
     // Then move pending and future logs to syslog.

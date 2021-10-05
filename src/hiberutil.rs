@@ -71,6 +71,26 @@ pub enum HibernateError {
 
 pub type Result<T> = std::result::Result<T, HibernateError>;
 
+pub struct HibernateOptions {
+    pub dry_run: bool,
+}
+
+impl HibernateOptions {
+    pub fn new() -> Self {
+        HibernateOptions { dry_run: false }
+    }
+}
+
+pub struct ResumeOptions {
+    pub dry_run: bool,
+}
+
+impl ResumeOptions {
+    pub fn new() -> Self {
+        ResumeOptions { dry_run: false }
+    }
+}
+
 pub unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
     ::std::slice::from_raw_parts((p as *const T) as *const u8, ::std::mem::size_of::<T>())
 }

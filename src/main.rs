@@ -5,6 +5,7 @@
 //! Coordinates suspend-to-disk activities
 
 use hiberman::{self, error};
+use hiberman::{HibernateOptions, ResumeOptions};
 use sys_util::syslog;
 
 fn print_usage(message: &str, error: bool) {
@@ -153,7 +154,7 @@ Options are:
 
 fn hiberman_hibernate(args: &mut std::env::Args) -> std::result::Result<(), ()> {
     init_logging()?;
-    let mut dry_run = false;
+    let mut options = HibernateOptions::new();
     for arg in args {
         match arg.as_ref() {
             "--help" | "-h" => {
@@ -162,7 +163,7 @@ fn hiberman_hibernate(args: &mut std::env::Args) -> std::result::Result<(), ()> 
             }
 
             "--dry-run" | "-n" => {
-                dry_run = true;
+                options.dry_run = false;
             }
 
             _ => {
@@ -172,7 +173,7 @@ fn hiberman_hibernate(args: &mut std::env::Args) -> std::result::Result<(), ()> 
         }
     }
 
-    if let Err(e) = hiberman::hibernate(dry_run) {
+    if let Err(e) = hiberman::hibernate(&options) {
         error!("Failed to hibernate: {}", e);
         return Err(());
     }
@@ -195,7 +196,7 @@ Options are:
 
 fn hiberman_resume(args: &mut std::env::Args) -> std::result::Result<(), ()> {
     init_logging()?;
-    let mut dry_run = false;
+    let mut options = ResumeOptions::new();
     for arg in args {
         match arg.as_ref() {
             "--help" | "-h" => {
@@ -204,7 +205,7 @@ fn hiberman_resume(args: &mut std::env::Args) -> std::result::Result<(), ()> {
             }
 
             "-n" | "--dry-run" => {
-                dry_run = true;
+                options.dry_run = true;
             }
 
             _ => {
@@ -214,7 +215,7 @@ fn hiberman_resume(args: &mut std::env::Args) -> std::result::Result<(), ()> {
         }
     }
 
-    if let Err(e) = hiberman::resume(dry_run) {
+    if let Err(e) = hiberman::resume(&options) {
         error!("Failed to resume: {}", e);
         return Err(());
     }
