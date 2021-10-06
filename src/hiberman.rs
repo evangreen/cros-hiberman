@@ -57,6 +57,20 @@ static SNAPSHOT_PLATFORM_SUPPORT: c_ulong = 0x330f;
 static SNAPSHOT_POWER_OFF: c_ulong = 0x3310;
 static SNAPSHOT_CREATE_IMAGE: c_ulong = 0x40043311;
 
+struct HibernateContext {
+    hiber_file: Option<DiskFile>,
+    meta_file: Option<BouncedDiskFile>,
+    snap_dev: Option<File>,
+    metadata: HibernateMetadata,
+}
+
+struct ResumeContext {
+    hiber_file: Option<DiskFile>,
+    meta_file: Option<BouncedDiskFile>,
+    snap_dev: Option<File>,
+    metadata: HibernateMetadata,
+}
+
 fn get_fs_stats(path: &Path) -> Result<libc::statvfs> {
     let path_str_c = CString::new(path.as_os_str().as_bytes()).unwrap();
     let mut stats: libc::statvfs;
@@ -423,40 +437,33 @@ fn snapshot_power_off(snap_dev: &mut File) -> Result<()> {
     Ok(())
 }
 
-fn write_image(
-    snap_dev: &mut File,
-    hiber_file: &mut DiskFile,
-    metadata: &mut HibernateMetadata,
-) -> Result<()> {
+fn write_image(context: &mut HibernateContext) -> Result<()> {
+    let snap_dev = context.snap_dev.as_mut().unwrap();
     let image_size = get_image_size(snap_dev)?;
     let page_size = get_page_size();
     debug!("Hibernate image is {} bytes", image_size);
     let mut writer = ImageMover::new(
         snap_dev,
-        hiber_file,
+        context.hiber_file.as_mut().unwrap(),
         image_size,
         page_size,
         page_size * BUFFER_PAGES,
     );
     writer.move_all()?;
     info!("Wrote {} MB", image_size / 1024 / 1024);
-    metadata.image_size = image_size as u64;
-    metadata.flags |= HIBERNATE_META_FLAG_VALID;
+    context.metadata.image_size = image_size as u64;
+    context.metadata.flags |= HIBERNATE_META_FLAG_VALID;
     Ok(())
 }
 
-fn read_image(
-    snap_dev: &mut File,
-    hiber_file: &mut DiskFile,
-    metadata: &mut HibernateMetadata,
-) -> Result<()> {
-    let image_size = metadata.image_size;
+fn read_image(context: &mut ResumeContext) -> Result<()> {
+    let image_size = context.metadata.image_size;
     debug!("Resume image is {} bytes", image_size);
     let page_size = get_page_size();
     // Move from the image, which can read big chunks, to the snapshot dev, which only writes pages.
     let mut reader = ImageMover::new(
-        hiber_file,
-        snap_dev,
+        context.hiber_file.as_mut().unwrap(),
+        context.snap_dev.as_mut().unwrap(),
         image_size as i64,
         page_size * BUFFER_PAGES,
         page_size,
@@ -466,23 +473,20 @@ fn read_image(
     Ok(())
 }
 
-fn snapshot_and_save(
-    mut hiber_file: DiskFile,
-    mut meta_file: BouncedDiskFile,
-    snap_dev: &mut File,
-    mut metadata: HibernateMetadata,
-    options: &HibernateOptions,
-) -> Result<()> {
+fn snapshot_and_save(context: &mut HibernateContext, options: &HibernateOptions) -> Result<()> {
     let block_path = path_to_stateful_block()?;
+    let snap_dev = context.snap_dev.as_mut().unwrap();
     set_platform_mode(snap_dev, false)?;
     // This is where the suspend path and resume path fork. On success,
     // both halves of these conditions execute, just at different times.
     if atomic_snapshot(snap_dev)? {
         // Suspend path. Everything after this point is invisible to the
         // hibernated kernel.
-        write_image(snap_dev, &mut hiber_file, &mut metadata)?;
-        drop(hiber_file);
-        metadata.write_to_disk(&mut meta_file)?;
+        write_image(context)?;
+        // Drop the hiber_file.
+        context.hiber_file.take();
+        let mut meta_file = context.meta_file.take().unwrap();
+        context.metadata.write_to_disk(&mut meta_file)?;
         drop(meta_file);
         // Set the hibernate cookie so the next boot knows to start in RO mode.
         info!("Setting hibernate cookie at {}", block_path);
@@ -500,6 +504,7 @@ fn snapshot_and_save(
 
         // Power the thing down.
         if !options.dry_run {
+            let snap_dev = context.snap_dev.as_mut().unwrap();
             snapshot_power_off(snap_dev)?;
             error!("Returned from power off");
         }
@@ -519,22 +524,27 @@ fn snapshot_and_save(
     Ok(())
 }
 
-fn suspend_system(
-    hiber_file: DiskFile,
-    meta_file: BouncedDiskFile,
-    options: &HibernateOptions,
-) -> Result<()> {
-    let metadata = HibernateMetadata::new();
-    let mut snap_dev = open_snapshot(false)?;
+fn suspend_system(context: &mut HibernateContext, options: &HibernateOptions) -> Result<()> {
+    context.snap_dev = Some(open_snapshot(false)?);
     info!("Freezing userspace");
-    freeze_userspace(&mut snap_dev, true)?;
-    let mut result = snapshot_and_save(hiber_file, meta_file, &mut snap_dev, metadata, options);
+    let snap_dev = context.snap_dev.as_mut().unwrap();
+    freeze_userspace(snap_dev, true)?;
+    let mut result = snapshot_and_save(context, options);
+    // Take the snapshot device, and then drop it so that other processes
+    // really unfreeze.
+    let mut snap_dev = context.snap_dev.take().unwrap();
     let freeze_result = freeze_userspace(&mut snap_dev, false);
     // Fail an otherwise happy suspend for failing to unfreeze, but don't
     // clobber an earlier error, as this is likely a downstream symptom.
-    if freeze_result.is_err() && result.is_ok() {
-        result = freeze_result;
+    if freeze_result.is_err() {
+        error!("Failed to unfreeze userspace: {:?}", freeze_result);
+        if result.is_ok() {
+            result = freeze_result;
+        }
+    } else {
+        debug!("Unfroze userspace");
     }
+
     result
 }
 
@@ -570,14 +580,12 @@ fn delete_data_if_disk_full(fs_stats: libc::statvfs) -> Result<()> {
     Ok(())
 }
 
-fn launch_resume_image(
-    mut meta_file: BouncedDiskFile,
-    mut metadata: HibernateMetadata,
-    snap_dev: &mut File,
-) -> Result<()> {
+fn launch_resume_image(context: &mut ResumeContext) -> Result<()> {
     // Clear the valid flag and set the resume flag to indicate this image was resumed into.
+    let metadata = &mut context.metadata;
     metadata.flags &= !HIBERNATE_META_FLAG_VALID;
     metadata.flags |= HIBERNATE_META_FLAG_RESUMED;
+    let mut meta_file = context.meta_file.take().unwrap();
     metadata.write_to_disk(&mut meta_file)?;
     if let Err(e) = meta_file.sync_all() {
         return Err(HibernateError::FileSyncError(
@@ -595,7 +603,7 @@ fn launch_resume_image(
     flush_log();
     // Keep logs in memory for now.
     redirect_log(HiberlogOut::BufferInMemory, None);
-    let result = atomic_restore(snap_dev);
+    let result = atomic_restore(context.snap_dev.as_mut().unwrap());
     error!("Resume failed");
     // If we are still executing then the resume failed. Mark it as such.
     metadata.flags |= HIBERNATE_META_FLAG_RESUME_FAILED;
@@ -603,12 +611,7 @@ fn launch_resume_image(
     result
 }
 
-fn resume_system(
-    options: &ResumeOptions,
-    mut hiber_file: DiskFile,
-    meta_file: BouncedDiskFile,
-    mut metadata: HibernateMetadata,
-) -> Result<()> {
+fn resume_system(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()> {
     // Divert away from syslog early to maximize logs that get pushed
     // into the resumed kernel.
     let mut log_file = open_log_file(false)?;
@@ -618,10 +621,13 @@ fn resume_system(
     redirect_log(HiberlogOut::File, Some(Box::new(log_file)));
     let mut snap_dev = open_snapshot(true)?;
     set_platform_mode(&mut snap_dev, false)?;
-    read_image(&mut snap_dev, &mut hiber_file, &mut metadata)?;
+    context.snap_dev = Some(snap_dev);
+    read_image(context)?;
     info!("Freezing userspace");
-    freeze_userspace(&mut snap_dev, true)?;
-    drop(hiber_file);
+    let snap_dev = context.snap_dev.as_mut().unwrap();
+    freeze_userspace(snap_dev, true)?;
+    // Drop the hiber file.
+    context.hiber_file.take();
     let result;
     if options.dry_run {
         info!("Not launching resume image: in a dry run.");
@@ -631,10 +637,12 @@ fn resume_system(
         redirect_log(HiberlogOut::BufferInMemory, None);
         result = Ok(())
     } else {
-        result = launch_resume_image(meta_file, metadata, &mut snap_dev);
+        result = launch_resume_image(context);
     }
 
     info!("Unfreezing userspace");
+    // Take the snap_dev, unfreeze userspace, and drop it.
+    let mut snap_dev = context.snap_dev.take().unwrap();
     if let Err(e) = freeze_userspace(&mut snap_dev, false) {
         error!("Failed to unfreeze userspace: {}", e);
     }
@@ -654,8 +662,13 @@ pub fn hibernate(options: &HibernateOptions) -> Result<()> {
         }
     }
 
-    let meta_file = preallocate_metadata_file()?;
-    let hiber_file = preallocate_hiberfile()?;
+    let mut context = HibernateContext {
+        hiber_file: Some(preallocate_hiberfile()?),
+        meta_file: Some(preallocate_metadata_file()?),
+        snap_dev: None,
+        metadata: HibernateMetadata::new(),
+    };
+
     // The resume log file needs to be preallocated now before the
     // snapshot is taken, though it's not used here.
     preallocate_log_file(false)?;
@@ -674,12 +687,12 @@ pub fn hibernate(options: &HibernateOptions) -> Result<()> {
         libc::sync();
     }
 
-    let result = suspend_system(hiber_file, meta_file, options);
+    let result = suspend_system(&mut context, options);
     unlock_process_memory();
-    // Replay logs first because they happened earlier.
-    replay_logs(result.is_ok() && !options.dry_run);
     // Now send any remaining logs and future logs to syslog.
     redirect_log(HiberlogOut::Syslog, None);
+    // Replay logs first because they happened earlier.
+    replay_logs(result.is_ok() && !options.dry_run);
     delete_data_if_disk_full(fs_stats)?;
     result
 }
@@ -703,7 +716,14 @@ pub fn resume_inner(options: &ResumeOptions) -> Result<()> {
     debug!("Opening hiberfile");
     let hiber_file = open_hiberfile()?;
     lock_process_memory()?;
-    let result = resume_system(options, hiber_file, meta_file, metadata);
+    let mut resume_context = ResumeContext {
+        hiber_file: Some(hiber_file),
+        meta_file: Some(meta_file),
+        metadata,
+        snap_dev: None,
+    };
+
+    let result = resume_system(&mut resume_context, options);
     unlock_process_memory();
     result
 }
