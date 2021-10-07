@@ -61,7 +61,7 @@ impl Read for BouncedDiskFile {
 
             // Copy into the caller's buffer.
             let src_end = self.offset + bytes_done;
-            let dst_end = offset + size_this_round;
+            let dst_end = offset + bytes_done;
             buf[offset..dst_end].copy_from_slice(&self.buf[self.offset..src_end]);
             offset += bytes_done;
         }

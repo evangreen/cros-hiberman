@@ -146,6 +146,8 @@ Options are:
         as the file systems will likely be modified after the process
         exits. Use this only for testing the hibernate sequence, in
         tandem with resume --dry-run.
+    --unencrypted -- Do not encrypt the hibernate image. Useful
+        only in measurement and debug scenarios.
     --help -- Print this help text.
 "#;
 
@@ -163,7 +165,11 @@ fn hiberman_hibernate(args: &mut std::env::Args) -> std::result::Result<(), ()> 
             }
 
             "--dry-run" | "-n" => {
-                options.dry_run = false;
+                options.dry_run = true;
+            }
+
+            "--unencrypted" => {
+                options.unencrypted = true;
             }
 
             _ => {
@@ -188,6 +194,8 @@ resumed image.
 
 Options are:
     -n, --dry-run -- Load the resume image, but don't actually jump into it.
+    --unencrypted -- Allow unencrypted resume images. Useful only for
+        measurement and debug scenarios.
     --help -- Print this help text.
 "#;
 
@@ -206,6 +214,10 @@ fn hiberman_resume(args: &mut std::env::Args) -> std::result::Result<(), ()> {
 
             "-n" | "--dry-run" => {
                 options.dry_run = true;
+            }
+
+            "--unencrypted" => {
+                options.unencrypted = true;
             }
 
             _ => {

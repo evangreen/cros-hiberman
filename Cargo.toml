@@ -21,3 +21,4 @@ libc = "0.2.93"
 sync = { path = "../../platform/crosvm/sync" } # provided by ebuild
 sys_util = { path = "../../platform/crosvm/sys_util" } # provided by ebuild
 thiserror = "1.0.20"
+openssl = "0.10.36"

@@ -5,6 +5,7 @@
 //! Implement hibernate functionality
 
 pub mod cookie;
+mod crypto;
 mod diskfile;
 mod fiemap;
 pub mod hiberlog;
@@ -13,11 +14,12 @@ mod hiberutil;
 mod imagemover;
 
 use cookie::set_hibernate_cookie;
+use crypto::CryptoWriter;
 use diskfile::{BouncedDiskFile, DiskFile};
 use hiberlog::{flush_log, redirect_log, replay_log_file, reset_log, HiberlogOut};
 use hibermeta::{
-    HibernateMetadata, HIBERNATE_META_FLAG_RESUMED, HIBERNATE_META_FLAG_RESUME_FAILED,
-    HIBERNATE_META_FLAG_VALID,
+    HibernateMetadata, HIBERNATE_META_FLAG_ENCRYPTED, HIBERNATE_META_FLAG_RESUMED,
+    HIBERNATE_META_FLAG_RESUME_FAILED, HIBERNATE_META_FLAG_VALID,
 };
 use hiberutil::{path_to_stateful_block, HibernateError, Result};
 pub use hiberutil::{HibernateOptions, ResumeOptions};
@@ -437,14 +439,31 @@ fn snapshot_power_off(snap_dev: &mut File) -> Result<()> {
     Ok(())
 }
 
-fn write_image(context: &mut HibernateContext) -> Result<()> {
+fn write_image(context: &mut HibernateContext, options: &HibernateOptions) -> Result<()> {
     let snap_dev = context.snap_dev.as_mut().unwrap();
     let image_size = get_image_size(snap_dev)?;
     let page_size = get_page_size();
+    let mut mover_dest: &mut dyn Write = context.hiber_file.as_mut().unwrap();
+    let mut encryptor;
+    if !options.unencrypted {
+        encryptor = CryptoWriter::new(
+            mover_dest,
+            context.metadata.data_key,
+            context.metadata.data_iv,
+            true,
+            page_size * BUFFER_PAGES,
+        );
+        mover_dest = &mut encryptor;
+        context.metadata.flags |= HIBERNATE_META_FLAG_ENCRYPTED;
+        debug!("Added encryption");
+    } else {
+        warn!("Warning: The hibernate image is unencrypted");
+    }
+
     debug!("Hibernate image is {} bytes", image_size);
     let mut writer = ImageMover::new(
         snap_dev,
-        context.hiber_file.as_mut().unwrap(),
+        mover_dest,
         image_size,
         page_size,
         page_size * BUFFER_PAGES,
@@ -456,14 +475,36 @@ fn write_image(context: &mut HibernateContext) -> Result<()> {
     Ok(())
 }
 
-fn read_image(context: &mut ResumeContext) -> Result<()> {
+fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()> {
+    let snap_dev = context.snap_dev.as_mut().unwrap();
     let image_size = context.metadata.image_size;
     debug!("Resume image is {} bytes", image_size);
     let page_size = get_page_size();
+    let mut mover_dest: &mut dyn Write = snap_dev;
+    let mut decryptor;
+    if (context.metadata.flags & HIBERNATE_META_FLAG_ENCRYPTED) != 0 {
+        decryptor = CryptoWriter::new(
+            snap_dev,
+            context.metadata.data_key,
+            context.metadata.data_iv,
+            false,
+            page_size,
+        );
+        mover_dest = &mut decryptor;
+        debug!("Image is encrypted")
+    } else {
+        if options.unencrypted {
+            warn!("Image is not encrypted");
+        } else {
+            error!("Unencrypted images are not permitted without --unencrypted");
+            return Err(HibernateError::ImageUnencryptedError());
+        }
+    }
+
     // Move from the image, which can read big chunks, to the snapshot dev, which only writes pages.
     let mut reader = ImageMover::new(
         context.hiber_file.as_mut().unwrap(),
-        context.snap_dev.as_mut().unwrap(),
+        mover_dest,
         image_size as i64,
         page_size * BUFFER_PAGES,
         page_size,
@@ -482,7 +523,7 @@ fn snapshot_and_save(context: &mut HibernateContext, options: &HibernateOptions)
     if atomic_snapshot(snap_dev)? {
         // Suspend path. Everything after this point is invisible to the
         // hibernated kernel.
-        write_image(context)?;
+        write_image(context, options)?;
         // Drop the hiber_file.
         context.hiber_file.take();
         let mut meta_file = context.meta_file.take().unwrap();
@@ -622,7 +663,7 @@ fn resume_system(context: &mut ResumeContext, options: &ResumeOptions) -> Result
     let mut snap_dev = open_snapshot(true)?;
     set_platform_mode(&mut snap_dev, false)?;
     context.snap_dev = Some(snap_dev);
-    read_image(context)?;
+    read_image(context, options)?;
     info!("Freezing userspace");
     let snap_dev = context.snap_dev.as_mut().unwrap();
     freeze_userspace(snap_dev, true)?;
@@ -666,7 +707,7 @@ pub fn hibernate(options: &HibernateOptions) -> Result<()> {
         hiber_file: Some(preallocate_hiberfile()?),
         meta_file: Some(preallocate_metadata_file()?),
         snap_dev: None,
-        metadata: HibernateMetadata::new(),
+        metadata: HibernateMetadata::new()?,
     };
 
     // The resume log file needs to be preallocated now before the

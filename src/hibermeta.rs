@@ -6,29 +6,39 @@
 
 use crate::diskfile::BouncedDiskFile;
 use crate::hiberutil::{any_as_u8_slice, HibernateError, Result};
+use std::fs::File;
 use std::io::{IoSliceMut, Read, Write};
 
 // Magic value used to recognize a hibernate metadata struct.
-static HIBERNATE_META_MAGIC: u64 = 0x6174654D72626948;
+const HIBERNATE_META_MAGIC: u64 = 0x6174654D72626948;
 // Version of the structure contents. Bump this up whenever the
 // structure changes.
-static HIBERNATE_META_VERSION: u32 = 1;
+const HIBERNATE_META_VERSION: u32 = 1;
 
 // Define hibernate metadata flags.
 // This flag is set if the hibernate image is valid and ready to be resumed to.
-pub static HIBERNATE_META_FLAG_VALID: u32 = 0x00000001;
+pub const HIBERNATE_META_FLAG_VALID: u32 = 0x00000001;
 
 // This flag is set if the image has already been resumed once. When this flag
 // is set the VALID flag is cleared.
-pub static HIBERNATE_META_FLAG_RESUMED: u32 = 0x00000002;
+pub const HIBERNATE_META_FLAG_RESUMED: u32 = 0x00000002;
 
 // This flag is set if the image has already been resumed into, but the resume
 // attempt failed. The RESUMED flag will also be set.
-pub static HIBERNATE_META_FLAG_RESUME_FAILED: u32 = 0x00000004;
+pub const HIBERNATE_META_FLAG_RESUME_FAILED: u32 = 0x00000004;
+
+// This flag is set if the image is encrypted.
+pub const HIBERNATE_META_FLAG_ENCRYPTED: u32 = 0x00000008;
 
 // Define the mask of all valid flags.
-pub static HIBERNATE_META_VALID_FLAGS: u32 =
-    HIBERNATE_META_FLAG_VALID | HIBERNATE_META_FLAG_RESUMED | HIBERNATE_META_FLAG_RESUME_FAILED;
+pub const HIBERNATE_META_VALID_FLAGS: u32 = HIBERNATE_META_FLAG_VALID
+    | HIBERNATE_META_FLAG_RESUMED
+    | HIBERNATE_META_FLAG_RESUME_FAILED
+    | HIBERNATE_META_FLAG_ENCRYPTED;
+
+// Define the size of the hibernate data symmetric encryption key.
+pub const HIBERNATE_DATA_KEY_SIZE: usize = 16;
+pub const HIBERNATE_DATA_IV_SIZE: usize = HIBERNATE_DATA_KEY_SIZE;
 
 // Define the structure of the hibernate metadata, which is written out to disk.
 // Use repr(C) to ensure a consistent structure layout.
@@ -42,16 +52,55 @@ pub struct HibernateMetadata {
     pub image_size: u64,
     // Flags. See HIBERNATE_META_FLAG_* definitions.
     pub flags: u32,
+    // Hibernate symmetric encryption key.
+    pub data_key: [u8; HIBERNATE_DATA_KEY_SIZE],
+    // Hibernate symmetric encryption IV (chosen randomly).
+    pub data_iv: [u8; HIBERNATE_DATA_IV_SIZE],
 }
 
 impl HibernateMetadata {
-    pub fn new() -> Self {
-        Self {
+    pub fn new() -> Result<Self> {
+        let mut urandom = match File::open("/dev/urandom") {
+            Ok(f) => f,
+            Err(e) => return Err(HibernateError::OpenFileError("/dev/urandom".to_string(), e)),
+        };
+
+        let mut data_key = [0u8; HIBERNATE_DATA_KEY_SIZE];
+        let mut slice = [IoSliceMut::new(&mut data_key)];
+        let bytes_read = match urandom.read_vectored(&mut slice) {
+            Ok(s) => s,
+            Err(e) => return Err(HibernateError::FileIoError("Failed to read".to_string(), e)),
+        };
+
+        if bytes_read != HIBERNATE_DATA_KEY_SIZE {
+            return Err(HibernateError::IoSizeError(format!(
+                "Only read {} of {} bytes",
+                bytes_read, HIBERNATE_DATA_KEY_SIZE
+            )));
+        }
+
+        let mut data_iv = [0u8; HIBERNATE_DATA_IV_SIZE];
+        let mut slice = [IoSliceMut::new(&mut data_iv)];
+        let bytes_read = match urandom.read_vectored(&mut slice) {
+            Ok(s) => s,
+            Err(e) => return Err(HibernateError::FileIoError("Failed to read".to_string(), e)),
+        };
+
+        if bytes_read != HIBERNATE_DATA_IV_SIZE {
+            return Err(HibernateError::IoSizeError(format!(
+                "Only read {} of {} bytes",
+                bytes_read, HIBERNATE_DATA_IV_SIZE
+            )));
+        }
+
+        Ok(Self {
             magic: HIBERNATE_META_MAGIC,
             version: HIBERNATE_META_VERSION,
             image_size: 0,
             flags: 0,
-        }
+            data_key,
+            data_iv,
+        })
     }
 
     pub fn load_from_disk(disk_file: &mut BouncedDiskFile) -> Result<Self> {

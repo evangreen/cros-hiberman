@@ -9,7 +9,7 @@ use std::process::Command;
 use thiserror::Error as ThisError;
 
 // Define the alignment needed for direct I/O.
-pub static DIRECT_IO_ALIGNMENT: usize = 0x1000;
+pub const DIRECT_IO_ALIGNMENT: usize = 0x1000;
 
 #[derive(Debug, ThisError)]
 pub enum HibernateError {
@@ -40,6 +40,9 @@ pub enum HibernateError {
     /// Invalid fiemap
     #[error("Invalid fiemap: {0}")]
     InvalidFiemapError(String),
+    /// Image unencrypted
+    #[error("Image unencrypted")]
+    ImageUnencryptedError(),
     /// Logger uninitialized.
     #[error("Logger uninitialized")]
     LoggerUninitialized(),
@@ -52,6 +55,9 @@ pub enum HibernateError {
     /// Poisoned
     #[error("Poisoned")]
     PoisonedError(),
+    /// I/O size error
+    #[error("I/O size error: {0}")]
+    IoSizeError(String),
     /// Failed to find the stateful mount.
     #[error("Failed to find the stateful mount: {0}")]
     RootdevError(String),
@@ -73,21 +79,29 @@ pub type Result<T> = std::result::Result<T, HibernateError>;
 
 pub struct HibernateOptions {
     pub dry_run: bool,
+    pub unencrypted: bool,
 }
 
 impl HibernateOptions {
     pub fn new() -> Self {
-        HibernateOptions { dry_run: false }
+        HibernateOptions {
+            dry_run: false,
+            unencrypted: false,
+        }
     }
 }
 
 pub struct ResumeOptions {
     pub dry_run: bool,
+    pub unencrypted: bool,
 }
 
 impl ResumeOptions {
     pub fn new() -> Self {
-        ResumeOptions { dry_run: false }
+        ResumeOptions {
+            dry_run: false,
+            unencrypted: false,
+        }
     }
 }
 
