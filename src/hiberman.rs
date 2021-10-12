@@ -747,7 +747,8 @@ pub fn resume_inner(options: &ResumeOptions) -> Result<()> {
     info!("Cleared cookie");
     let mut meta_file = open_metafile()?;
     debug!("Loading metadata");
-    let metadata = HibernateMetadata::load_from_disk(&mut meta_file)?;
+    let mut metadata = HibernateMetadata::load_from_disk(&mut meta_file)?;
+    metadata.load_private_data()?;
     if (metadata.flags & HIBERNATE_META_FLAG_VALID) == 0 {
         return Err(HibernateError::MetadataError(
             "No valid hibernate image".to_string(),

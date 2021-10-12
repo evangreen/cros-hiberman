@@ -6,6 +6,7 @@
 
 use crate::diskfile::BouncedDiskFile;
 use crate::hiberutil::{any_as_u8_slice, HibernateError, Result};
+use openssl::symm::{Cipher, Crypter, Mode};
 use std::fs::File;
 use std::io::{IoSliceMut, Read, Write};
 
@@ -40,14 +41,16 @@ pub const HIBERNATE_META_VALID_FLAGS: u32 = HIBERNATE_META_FLAG_VALID
 pub const HIBERNATE_DATA_KEY_SIZE: usize = 16;
 pub const HIBERNATE_DATA_IV_SIZE: usize = HIBERNATE_DATA_KEY_SIZE;
 
-// Define the structure of the hibernate metadata, which is written out to disk.
-// Use repr(C) to ensure a consistent structure layout.
-#[repr(C)]
+// Define the size of the encrypted private area. Bump this up (and
+// bump the version) if PrivateHibernateMetadata outgrows it.
+pub const HIBERNATE_META_PRIVATE_SIZE: usize = 0x400;
+
+// Temporary encryption key for private data.
+pub const STUPID_META_KEY: &[u8; HIBERNATE_DATA_KEY_SIZE] =
+    b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F";
+
+// Define the software representation of the hibernate metadata.
 pub struct HibernateMetadata {
-    // This must be set to HIBERNATE_META_MAGIC.
-    magic: u64,
-    // This must be set to HIBERNATE_META_VERSION.
-    version: u32,
     // The size of the hibernate image data.
     pub image_size: u64,
     // Flags. See HIBERNATE_META_FLAG_* definitions.
@@ -56,6 +59,46 @@ pub struct HibernateMetadata {
     pub data_key: [u8; HIBERNATE_DATA_KEY_SIZE],
     // Hibernate symmetric encryption IV (chosen randomly).
     pub data_iv: [u8; HIBERNATE_DATA_IV_SIZE],
+    // Random IV used for metadata encryption.
+    meta_iv: [u8; HIBERNATE_DATA_IV_SIZE],
+    // Store the not-yet-decrypted private data.
+    private_blob: Option<[u8; HIBERNATE_META_PRIVATE_SIZE]>,
+}
+
+// Define the structure of the public hibernate metadata, which is written
+// out to disk unencrypted.
+// Use repr(C) to ensure a consistent structure layout.
+#[repr(C)]
+pub struct PublicHibernateMetadata {
+    // This must be set to HIBERNATE_META_MAGIC.
+    magic: u64,
+    // This must be set to HIBERNATE_META_VERSION.
+    version: u32,
+    // The size of the hibernate image data.
+    image_size: u64,
+    // Flags. See HIBERNATE_META_FLAG_* definitions.
+    flags: u32,
+    // IV used for private portion of metadata.
+    private_iv: [u8; HIBERNATE_DATA_IV_SIZE],
+    // Encrypted portion.
+    private: [u8; HIBERNATE_META_PRIVATE_SIZE],
+}
+
+// Define the structure of the private hibernate metadata, which is written
+// out to disk encrypted.
+// Use repr(C) to ensure a consistent structure layout.
+#[repr(C)]
+pub struct PrivateHibernateMetadata {
+    // This must be set to HIBERNATE_META_VERSION.
+    version: u32,
+    // The size of the hibernate image data.
+    image_size: u64,
+    // Flags. See HIBERNATE_META_FLAG_* definitions.
+    flags: u32,
+    // Hibernate symmetric encryption key.
+    data_key: [u8; HIBERNATE_DATA_KEY_SIZE],
+    // Hibernate symmetric encryption IV (chosen randomly).
+    data_iv: [u8; HIBERNATE_DATA_IV_SIZE],
 }
 
 impl HibernateMetadata {
@@ -66,43 +109,55 @@ impl HibernateMetadata {
         };
 
         let mut data_key = [0u8; HIBERNATE_DATA_KEY_SIZE];
-        let mut slice = [IoSliceMut::new(&mut data_key)];
-        let bytes_read = match urandom.read_vectored(&mut slice) {
-            Ok(s) => s,
-            Err(e) => return Err(HibernateError::FileIoError("Failed to read".to_string(), e)),
-        };
-
-        if bytes_read != HIBERNATE_DATA_KEY_SIZE {
-            return Err(HibernateError::IoSizeError(format!(
-                "Only read {} of {} bytes",
-                bytes_read, HIBERNATE_DATA_KEY_SIZE
-            )));
-        }
-
+        Self::fill_random(&mut urandom, &mut data_key)?;
         let mut data_iv = [0u8; HIBERNATE_DATA_IV_SIZE];
-        let mut slice = [IoSliceMut::new(&mut data_iv)];
-        let bytes_read = match urandom.read_vectored(&mut slice) {
-            Ok(s) => s,
-            Err(e) => return Err(HibernateError::FileIoError("Failed to read".to_string(), e)),
-        };
-
-        if bytes_read != HIBERNATE_DATA_IV_SIZE {
-            return Err(HibernateError::IoSizeError(format!(
-                "Only read {} of {} bytes",
-                bytes_read, HIBERNATE_DATA_IV_SIZE
-            )));
-        }
-
+        Self::fill_random(&mut urandom, &mut data_iv)?;
+        let mut meta_iv = [0u8; HIBERNATE_DATA_IV_SIZE];
+        Self::fill_random(&mut urandom, &mut meta_iv)?;
         Ok(Self {
-            magic: HIBERNATE_META_MAGIC,
-            version: HIBERNATE_META_VERSION,
             image_size: 0,
             flags: 0,
             data_key,
             data_iv,
+            meta_iv,
+            private_blob: None,
         })
     }
 
+    pub fn load_from_data(pubdata: &PublicHibernateMetadata) -> Result<Self> {
+        if pubdata.magic != HIBERNATE_META_MAGIC {
+            return Err(HibernateError::MetadataError(format!(
+                "Invalid metadata magic: {:x?}, expected {:x?}",
+                pubdata.magic, HIBERNATE_META_MAGIC
+            )));
+        }
+
+        if pubdata.version != HIBERNATE_META_VERSION {
+            return Err(HibernateError::MetadataError(format!(
+                "Invalid public metadata version: {:x?}, expected {:x?}",
+                pubdata.version, HIBERNATE_META_VERSION
+            )));
+        }
+
+        if (pubdata.flags & !HIBERNATE_META_VALID_FLAGS) != 0 {
+            return Err(HibernateError::MetadataError(format!(
+                "Invalid flags: {:x?}, valid mask {:x?}",
+                pubdata.flags, HIBERNATE_META_VALID_FLAGS
+            )));
+        }
+
+        Ok(Self {
+            image_size: pubdata.image_size,
+            flags: pubdata.flags,
+            data_key: [0u8; HIBERNATE_DATA_KEY_SIZE],
+            data_iv: [0u8; HIBERNATE_DATA_IV_SIZE],
+            meta_iv: pubdata.private_iv,
+            private_blob: Some(pubdata.private),
+        })
+    }
+
+    // Loads the metadata from disk, and populates the structure based on the
+    // public data. The private data is left in a blob.
     pub fn load_from_disk(disk_file: &mut BouncedDiskFile) -> Result<Self> {
         let mut buf = vec![0u8; 4096];
         let mut slice = [IoSliceMut::new(&mut buf)];
@@ -111,7 +166,7 @@ impl HibernateMetadata {
             Err(e) => return Err(HibernateError::FileIoError("Failed to read".to_string(), e)),
         };
 
-        if bytes_read < std::mem::size_of::<HibernateMetadata>() {
+        if bytes_read < std::mem::size_of::<PublicHibernateMetadata>() {
             return Err(HibernateError::MetadataError(
                 "Read too few bytes".to_string(),
             ));
@@ -119,34 +174,76 @@ impl HibernateMetadata {
 
         // This is safe because the buffer is larger than the structure size, and the types
         // in the struct are all basic.
-        let metadata: Self = unsafe {
+        let public_data: PublicHibernateMetadata = unsafe {
             std::ptr::read_unaligned(
-                buf[0..std::mem::size_of::<HibernateMetadata>()].as_ptr() as *const _
+                buf[0..std::mem::size_of::<PublicHibernateMetadata>()].as_ptr() as *const _,
             )
         };
 
-        if metadata.magic != HIBERNATE_META_MAGIC {
+        Self::load_from_data(&public_data)
+    }
+
+    pub fn load_private_data(&mut self) -> Result<()> {
+        // Decrypt the private data.
+        let cipher = Cipher::aes_128_cbc();
+        let mut crypter = Crypter::new(
+            cipher,
+            Mode::Decrypt,
+            &STUPID_META_KEY[..],
+            Some(&self.meta_iv),
+        )
+        .unwrap();
+        crypter.pad(true);
+        let mut private_buf = vec![0u8; HIBERNATE_META_PRIVATE_SIZE + cipher.block_size()];
+        let decrypt_size = match crypter.update(&self.private_blob.unwrap(), &mut private_buf) {
+            Ok(s) => s,
+            Err(e) => {
+                return Err(HibernateError::MetadataError(format!(
+                    "Decryption error: {}",
+                    e
+                )))
+            }
+        };
+
+        if decrypt_size < std::mem::size_of::<PrivateHibernateMetadata>() {
             return Err(HibernateError::MetadataError(format!(
-                "Invalid metadata magic: {:x?}, expected {:x?}",
-                metadata.magic, HIBERNATE_META_MAGIC
+                "Private metadata was {:x?} bytes, expected at least {:x?}",
+                decrypt_size,
+                std::mem::size_of::<PrivateHibernateMetadata>()
             )));
         }
 
-        if metadata.version != HIBERNATE_META_VERSION {
+        // This is safe because we just validated we decrypted the structure
+        // size (above), and the types in the struct are all basic.
+        let private_data: PrivateHibernateMetadata = unsafe {
+            std::ptr::read_unaligned(
+                private_buf[0..std::mem::size_of::<PrivateHibernateMetadata>()].as_ptr()
+                    as *const _,
+            )
+        };
+
+        self.apply_private_data(&private_data)
+    }
+
+    fn apply_private_data(&mut self, privdata: &PrivateHibernateMetadata) -> Result<()> {
+        if privdata.version != HIBERNATE_META_VERSION {
             return Err(HibernateError::MetadataError(format!(
-                "Invalid metadata version: {:x?}, expected {:x?}",
-                metadata.version, HIBERNATE_META_VERSION
+                "Invalid private metadata version: {:x?}, expected {:x?}",
+                privdata.version, HIBERNATE_META_VERSION
             )));
         }
 
-        if (metadata.flags & !HIBERNATE_META_VALID_FLAGS) != 0 {
+        if self.image_size != privdata.image_size {
             return Err(HibernateError::MetadataError(format!(
-                "Invalid flags: {:x?}, valid mask {:x?}",
-                metadata.flags, HIBERNATE_META_VALID_FLAGS
+                "Mismatch in public private image size: {:x?} vs {:x?}",
+                privdata.image_size, self.image_size
             )));
         }
 
-        Ok(metadata)
+        self.data_key = privdata.data_key;
+        self.data_iv = privdata.data_iv;
+        self.flags = privdata.flags;
+        Ok(())
     }
 
     pub fn write_to_disk(&self, disk_file: &mut BouncedDiskFile) -> Result<()> {
@@ -161,10 +258,15 @@ impl HibernateMetadata {
             )));
         }
 
+        assert!(buf.len() >= std::mem::size_of::<PublicHibernateMetadata>());
+
+        let public_data = self.build_public_data()?;
         unsafe {
             // Copy the struct into the beginning of the u8 buffer. This is safe
-            // because the buffer was allocated to be larger than this struct size.
-            buf[0..std::mem::size_of::<HibernateMetadata>()].copy_from_slice(any_as_u8_slice(self));
+            // because the buffer was allocated to be larger than this struct
+            // size.
+            buf[0..std::mem::size_of::<PublicHibernateMetadata>()]
+                .copy_from_slice(any_as_u8_slice(&public_data));
         }
 
         let bytes_written = match disk_file.write(&buf[..]) {
@@ -177,10 +279,96 @@ impl HibernateMetadata {
             }
         };
 
-        if bytes_written < std::mem::size_of::<HibernateMetadata>() {
+        if bytes_written != buf.len() {
             return Err(HibernateError::MetadataError(
-                "Read too few bytes".to_string(),
+                "Wrote too few bytes".to_string(),
             ));
+        }
+
+        Ok(())
+    }
+
+    fn build_public_data(&self) -> Result<PublicHibernateMetadata> {
+        Ok(PublicHibernateMetadata {
+            magic: HIBERNATE_META_MAGIC,
+            version: HIBERNATE_META_VERSION,
+            image_size: self.image_size,
+            flags: self.flags,
+            private_iv: self.meta_iv,
+            private: self.build_private_buffer()?,
+        })
+    }
+
+    // Construct the encrypted private buffer area.
+    fn build_private_buffer(&self) -> Result<[u8; HIBERNATE_META_PRIVATE_SIZE]> {
+        let mut buf = [0u8; HIBERNATE_META_PRIVATE_SIZE];
+        let private_data = self.build_private_data();
+
+        // Encrypt it into the buffer.
+        let cipher = Cipher::aes_128_cbc();
+        let mut crypter = Crypter::new(
+            cipher,
+            Mode::Encrypt,
+            &STUPID_META_KEY[..],
+            Some(&self.meta_iv),
+        )
+        .unwrap();
+        crypter.pad(true);
+        // It's safe to call as_any_u8_slice() with the private data because the
+        // encrypter can handle the raw bytes.
+        let encrypt_size;
+        unsafe {
+            encrypt_size = match crypter.update(any_as_u8_slice(&private_data), &mut buf) {
+                Ok(s) => s,
+                Err(e) => {
+                    return Err(HibernateError::MetadataError(format!(
+                        "Encryption error: {}",
+                        e
+                    )))
+                }
+            };
+        }
+
+        if let Err(e) = crypter.finalize(&mut buf[encrypt_size..]) {
+            return Err(HibernateError::MetadataError(format!(
+                "Encryption error: {}",
+                e
+            )));
+        }
+
+        Ok(buf)
+    }
+
+    // Construct the private metadata C structure contents.
+    fn build_private_data(&self) -> PrivateHibernateMetadata {
+        PrivateHibernateMetadata {
+            version: HIBERNATE_META_VERSION,
+            image_size: self.image_size,
+            flags: self.flags,
+            data_key: self.data_key,
+            data_iv: self.data_iv,
+        }
+    }
+
+    // Fill a buffer with random bytes, given an open file to /dev/urandom.
+    fn fill_random(urandom: &mut File, buf: &mut [u8]) -> Result<()> {
+        let length = buf.len();
+        let mut slice = [IoSliceMut::new(buf)];
+        let bytes_read = match urandom.read_vectored(&mut slice) {
+            Ok(s) => s,
+            Err(e) => {
+                return Err(HibernateError::FileIoError(
+                    "Failed to read urandom".to_string(),
+                    e,
+                ))
+            }
+        };
+
+        if bytes_read != length {
+            return Err(HibernateError::IoSizeError(format!(
+                "Only read {} of {} bytes",
+                bytes_read, length
+            )));
         }
 
         Ok(())
