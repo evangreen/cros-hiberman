@@ -43,6 +43,9 @@ pub enum HibernateError {
     /// Image unencrypted
     #[error("Image unencrypted")]
     ImageUnencryptedError(),
+    /// Key manager error
+    #[error("Key manager error: {0}")]
+    KeyManagerError(String),
     /// Logger uninitialized.
     #[error("Logger uninitialized")]
     LoggerUninitialized(),
@@ -80,6 +83,7 @@ pub type Result<T> = std::result::Result<T, HibernateError>;
 pub struct HibernateOptions {
     pub dry_run: bool,
     pub unencrypted: bool,
+    pub test_keys: bool,
 }
 
 impl HibernateOptions {
@@ -87,6 +91,7 @@ impl HibernateOptions {
         HibernateOptions {
             dry_run: false,
             unencrypted: false,
+            test_keys: false,
         }
     }
 }
@@ -94,6 +99,7 @@ impl HibernateOptions {
 pub struct ResumeOptions {
     pub dry_run: bool,
     pub unencrypted: bool,
+    pub test_keys: bool,
 }
 
 impl ResumeOptions {
@@ -101,6 +107,7 @@ impl ResumeOptions {
         ResumeOptions {
             dry_run: false,
             unencrypted: false,
+            test_keys: false,
         }
     }
 }

@@ -12,6 +12,7 @@ pub mod hiberlog;
 mod hibermeta;
 mod hiberutil;
 mod imagemover;
+mod keyman;
 
 use cookie::set_hibernate_cookie;
 use crypto::CryptoWriter;
@@ -24,6 +25,7 @@ use hibermeta::{
 use hiberutil::{path_to_stateful_block, HibernateError, Result};
 pub use hiberutil::{HibernateOptions, ResumeOptions};
 use imagemover::ImageMover;
+use keyman::HibernateKeyManager;
 use libc::{self, c_int, c_ulong, c_void, loff_t};
 use std::ffi::CString;
 use std::fs::{create_dir, metadata, File, OpenOptions};
@@ -653,8 +655,6 @@ fn launch_resume_image(context: &mut ResumeContext) -> Result<()> {
 }
 
 fn resume_system(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()> {
-    // Divert away from syslog early to maximize logs that get pushed
-    // into the resumed kernel.
     let mut log_file = open_log_file(false)?;
     // Don't allow the logfile to log as it creates a deadlock.
     log_file.set_logging(false);
@@ -720,6 +720,18 @@ pub fn hibernate(options: &HibernateOptions) -> Result<()> {
     lock_process_memory()?;
     let mut swappiness = save_swappiness()?;
     write_swappiness(&mut swappiness.file, SUSPEND_SWAPPINESS)?;
+    let mut key_manager = HibernateKeyManager::new();
+    // Set up the hibernate metadata encryption keys. This was populated
+    // at login time by a previous instance of this process.
+    if options.test_keys {
+        key_manager.use_test_keys()?;
+    } else {
+        key_manager.load_public_key()?;
+    }
+
+    // Now that the public key is loaded, derive a metadata encryption key.
+    key_manager.install_new_metadata_key(&mut context.metadata)?;
+
     // Stop logging to syslog, and divert instead to a file since the
     // logging daemon's about to be frozen.
     redirect_log(HiberlogOut::File, Some(Box::new(log_file)));
@@ -748,6 +760,17 @@ pub fn resume_inner(options: &ResumeOptions) -> Result<()> {
     let mut meta_file = open_metafile()?;
     debug!("Loading metadata");
     let mut metadata = HibernateMetadata::load_from_disk(&mut meta_file)?;
+    let mut key_manager = HibernateKeyManager::new();
+    if options.test_keys {
+        key_manager.use_test_keys()?;
+        key_manager.install_saved_metadata_key(&mut metadata)?;
+    } else {
+        error!("Gathering key material from cryptohome net yet implemented.");
+        return Err(HibernateError::MetadataError(
+            "TODO: Implement real keying".to_string(),
+        ));
+    }
+
     metadata.load_private_data()?;
     if (metadata.flags & HIBERNATE_META_FLAG_VALID) == 0 {
         return Err(HibernateError::MetadataError(

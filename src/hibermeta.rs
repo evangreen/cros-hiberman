@@ -45,9 +45,9 @@ pub const HIBERNATE_DATA_IV_SIZE: usize = HIBERNATE_DATA_KEY_SIZE;
 // bump the version) if PrivateHibernateMetadata outgrows it.
 pub const HIBERNATE_META_PRIVATE_SIZE: usize = 0x400;
 
-// Temporary encryption key for private data.
-pub const STUPID_META_KEY: &[u8; HIBERNATE_DATA_KEY_SIZE] =
-    b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F";
+// Define the size of the asymmetric keypairs used to encrypt the
+// hibernate metadata.
+pub const HIBERNATE_META_KEY_SIZE: usize = 32;
 
 // Define the software representation of the hibernate metadata.
 pub struct HibernateMetadata {
@@ -59,10 +59,15 @@ pub struct HibernateMetadata {
     pub data_key: [u8; HIBERNATE_DATA_KEY_SIZE],
     // Hibernate symmetric encryption IV (chosen randomly).
     pub data_iv: [u8; HIBERNATE_DATA_IV_SIZE],
+    // Public side of the ephemeral keypair used in Diffie-Hellman to derive
+    // the metadata key.
+    pub meta_eph_public: [u8; HIBERNATE_META_KEY_SIZE],
     // Random IV used for metadata encryption.
     meta_iv: [u8; HIBERNATE_DATA_IV_SIZE],
-    // Store the not-yet-decrypted private data.
+    // The not-yet-decrypted private data.
     private_blob: Option<[u8; HIBERNATE_META_PRIVATE_SIZE]>,
+    // The key used to decrypt private metadata.
+    meta_key: Option<[u8; HIBERNATE_DATA_KEY_SIZE]>,
 }
 
 // Define the structure of the public hibernate metadata, which is written
@@ -78,6 +83,9 @@ pub struct PublicHibernateMetadata {
     image_size: u64,
     // Flags. See HIBERNATE_META_FLAG_* definitions.
     flags: u32,
+    // Public side of the ephemeral keypair used in Diffie-Hellman to
+    // derive the metadata key.
+    meta_eph_public: [u8; HIBERNATE_META_KEY_SIZE],
     // IV used for private portion of metadata.
     private_iv: [u8; HIBERNATE_DATA_IV_SIZE],
     // Encrypted portion.
@@ -114,13 +122,20 @@ impl HibernateMetadata {
         Self::fill_random(&mut urandom, &mut data_iv)?;
         let mut meta_iv = [0u8; HIBERNATE_DATA_IV_SIZE];
         Self::fill_random(&mut urandom, &mut meta_iv)?;
+        // Initialize the other keys with random junk as well to avoid bugs
+        // where zeroed keys get used. These should never actually get used with
+        // the random data (they'd be undecryptable if they were).
+        let mut meta_eph_public = [0u8; HIBERNATE_META_KEY_SIZE];
+        Self::fill_random(&mut urandom, &mut meta_eph_public)?;
         Ok(Self {
             image_size: 0,
             flags: 0,
             data_key,
             data_iv,
             meta_iv,
+            meta_eph_public,
             private_blob: None,
+            meta_key: None,
         })
     }
 
@@ -152,6 +167,8 @@ impl HibernateMetadata {
             data_key: [0u8; HIBERNATE_DATA_KEY_SIZE],
             data_iv: [0u8; HIBERNATE_DATA_IV_SIZE],
             meta_iv: pubdata.private_iv,
+            meta_key: None,
+            meta_eph_public: pubdata.meta_eph_public,
             private_blob: Some(pubdata.private),
         })
     }
@@ -183,13 +200,23 @@ impl HibernateMetadata {
         Self::load_from_data(&public_data)
     }
 
+    pub fn set_metadata_key(&mut self, key: [u8; HIBERNATE_DATA_KEY_SIZE]) {
+        self.meta_key = Some(key);
+    }
+
     pub fn load_private_data(&mut self) -> Result<()> {
+        if matches!(self.meta_key, None) {
+            return Err(HibernateError::MetadataError(
+                "Meta key not set".to_string(),
+            ));
+        }
+
         // Decrypt the private data.
         let cipher = Cipher::aes_128_cbc();
         let mut crypter = Crypter::new(
             cipher,
             Mode::Decrypt,
-            &STUPID_META_KEY[..],
+            &self.meta_key.unwrap(),
             Some(&self.meta_iv),
         )
         .unwrap();
@@ -294,6 +321,7 @@ impl HibernateMetadata {
             version: HIBERNATE_META_VERSION,
             image_size: self.image_size,
             flags: self.flags,
+            meta_eph_public: self.meta_eph_public,
             private_iv: self.meta_iv,
             private: self.build_private_buffer()?,
         })
@@ -304,12 +332,18 @@ impl HibernateMetadata {
         let mut buf = [0u8; HIBERNATE_META_PRIVATE_SIZE];
         let private_data = self.build_private_data();
 
+        if matches!(self.meta_key, None) {
+            return Err(HibernateError::MetadataError(
+                "Meta key not set".to_string(),
+            ));
+        }
+
         // Encrypt it into the buffer.
         let cipher = Cipher::aes_128_cbc();
         let mut crypter = Crypter::new(
             cipher,
             Mode::Encrypt,
-            &STUPID_META_KEY[..],
+            &self.meta_key.unwrap(),
             Some(&self.meta_iv),
         )
         .unwrap();
