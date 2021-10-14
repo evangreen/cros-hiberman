@@ -8,9 +8,6 @@ use crate::error;
 use std::process::Command;
 use thiserror::Error as ThisError;
 
-// Define the alignment needed for direct I/O.
-pub const DIRECT_IO_ALIGNMENT: usize = 0x1000;
-
 #[derive(Debug, ThisError)]
 pub enum HibernateError {
     /// Cookie error
@@ -55,6 +52,9 @@ pub enum HibernateError {
     /// Failed to lock process memory.
     #[error("Failed to mlockall: {0}")]
     MlockallError(sys_util::Error),
+    /// Mmap error.
+    #[error("mmap error: {0}")]
+    MmapError(sys_util::Error),
     /// Poisoned
     #[error("Poisoned")]
     PoisonedError(),
@@ -116,17 +116,8 @@ pub unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
     ::std::slice::from_raw_parts((p as *const T) as *const u8, ::std::mem::size_of::<T>())
 }
 
-// Compute the byte offset to start at for the given vector to get a buffer
-// aligned to the given size. The alignment must be a power of two, and smaller
-// than the buffer.
-pub fn buffer_alignment_offset(buf: &Vec<u8>, alignment: usize) -> usize {
-    let address = buf.as_ptr() as usize;
-    let offset = address & (alignment - 1);
-    if offset == 0 {
-        return offset;
-    }
-
-    return alignment - offset;
+pub fn get_page_size() -> usize {
+    unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize }
 }
 
 // Return the underlying partition device the hibernate files reside on.

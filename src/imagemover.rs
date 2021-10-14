@@ -4,13 +4,11 @@
 
 //! Implements support for moving an image from one fd to another, with alignment and transformation.
 
-use crate::hiberutil::{buffer_alignment_offset, HibernateError, Result, DIRECT_IO_ALIGNMENT};
+use crate::hiberutil::{HibernateError, Result};
+use crate::mmapbuf::MmapBuffer;
 use crate::{debug, error, info, warn};
 use libc::{self, loff_t};
 use std::io::{IoSliceMut, Read, Write};
-
-// How should the buffer be aligned.
-static BUFFER_ALIGNMENT: usize = DIRECT_IO_ALIGNMENT;
 
 pub struct ImageMover<'a> {
     source_file: &'a mut dyn Read,
@@ -20,9 +18,8 @@ pub struct ImageMover<'a> {
     source_chunk: usize,
     dest_chunk: usize,
     buffer_size: usize,
-    buffer: Vec<u8>,
+    buffer: MmapBuffer,
     buffer_offset: usize,
-    buffer_align: usize,
     percent_reported: u32,
 }
 
@@ -34,7 +31,7 @@ impl<'a> ImageMover<'a> {
         source_size: loff_t,
         source_chunk: usize,
         dest_chunk: usize,
-    ) -> ImageMover<'a> {
+    ) -> Result<ImageMover<'a>> {
         // The buffer size is the max of the source or destination chunk size.
         // Both are expected to be powers of two, which means one is always a multiple
         // of the other.
@@ -43,9 +40,8 @@ impl<'a> ImageMover<'a> {
             buffer_size = dest_chunk;
         }
 
-        let buffer = vec![0u8; buffer_size + BUFFER_ALIGNMENT];
-        let buffer_align = buffer_alignment_offset(&buffer, BUFFER_ALIGNMENT);
-        Self {
+        let buffer = MmapBuffer::new(buffer_size)?;
+        Ok(Self {
             source_file,
             dest_file,
             source_size,
@@ -55,9 +51,8 @@ impl<'a> ImageMover<'a> {
             buffer_size,
             buffer,
             buffer_offset: 0,
-            buffer_align,
             percent_reported: 0,
-        }
+        })
     }
 
     fn flush_buffer(&mut self) -> Result<()> {
@@ -73,9 +68,10 @@ impl<'a> ImageMover<'a> {
                 length = self.dest_chunk;
             }
 
-            let start = self.buffer_align + offset;
+            let start = offset;
             let end = start + length;
-            let bytes_written = match self.dest_file.write(&self.buffer[start..end]) {
+            let buffer_slice = self.buffer.u8_slice();
+            let bytes_written = match self.dest_file.write(&buffer_slice[start..end]) {
                 Ok(s) => s,
                 Err(e) => {
                     error!(
@@ -122,9 +118,10 @@ impl<'a> ImageMover<'a> {
             length = self.buffer_size - self.buffer_offset;
         }
 
-        let start = self.buffer_align + self.buffer_offset;
+        let start = self.buffer_offset;
         let end = start + length;
-        let mut slice_mut = [IoSliceMut::new(&mut self.buffer[start..end])];
+        let buffer_slice = self.buffer.u8_slice_mut();
+        let mut slice_mut = [IoSliceMut::new(&mut buffer_slice[start..end])];
         let bytes_read = match self.source_file.read_vectored(&mut slice_mut) {
             Ok(s) => s,
             Err(e) => return Err(HibernateError::FileIoError("Failed to read".to_string(), e)),

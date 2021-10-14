@@ -4,9 +4,8 @@
 
 //! Manages the "valid resume image" cookie.
 
-use crate::hiberutil::{
-    buffer_alignment_offset, path_to_stateful_block, HibernateError, Result, DIRECT_IO_ALIGNMENT,
-};
+use crate::hiberutil::{path_to_stateful_block, HibernateError, Result};
+use crate::mmapbuf::MmapBuffer;
 use std::fs::{File, OpenOptions};
 use std::io::{IoSlice, IoSliceMut, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::OpenOptionsExt;
@@ -14,8 +13,7 @@ use std::path::Path;
 
 struct HibernateCookie {
     blockdev: File,
-    buf: Vec<u8>,
-    offset: usize,
+    buffer: MmapBuffer,
 }
 
 static HIBERNATE_COOKIE_READ_SIZE: usize = 0x400;
@@ -25,8 +23,6 @@ static HIBERNATE_COOKIE_WRITE_SIZE: usize = 0x400;
 static GPT_MAGIC_OFFSET: usize = 0x200;
 static GPT_MAGIC: u64 = 0x5452415020494645; // 'EFI PART'
 
-// Define the alignment needed on hibernate cookie I/O.
-static HIBERNATE_COOKIE_ALIGNMENT: usize = DIRECT_IO_ALIGNMENT;
 // The beginning of the disk starts with a protective MBR, followed by
 // a sector just for the GPT header. The GPT header is quite small and doesn't
 // use its whole sector. Use the end of the sector to store the hibernate
@@ -49,13 +45,8 @@ impl HibernateCookie {
             Err(e) => return Err(HibernateError::OpenFileError(path.display().to_string(), e)),
         };
 
-        let buf = vec![0u8; HIBERNATE_COOKIE_READ_SIZE + HIBERNATE_COOKIE_ALIGNMENT];
-        let offset = buffer_alignment_offset(&buf, HIBERNATE_COOKIE_ALIGNMENT);
-        Ok(HibernateCookie {
-            blockdev,
-            buf,
-            offset,
-        })
+        let buffer = MmapBuffer::new(HIBERNATE_COOKIE_READ_SIZE)?;
+        Ok(HibernateCookie { blockdev, buffer })
     }
 
     pub fn read(&mut self) -> Result<bool> {
@@ -63,9 +54,10 @@ impl HibernateCookie {
             return Err(HibernateError::FileIoError("Failed to seek".to_string(), e));
         }
 
-        let start = self.offset;
-        let end = start + HIBERNATE_COOKIE_READ_SIZE;
-        let mut slice_mut = [IoSliceMut::new(&mut self.buf[start..end])];
+        let buffer_slice = self.buffer.u8_slice_mut();
+        let mut slice_mut = [IoSliceMut::new(
+            &mut buffer_slice[..HIBERNATE_COOKIE_READ_SIZE],
+        )];
         let bytes_read = match self.blockdev.read_vectored(&mut slice_mut) {
             Ok(s) => s,
             Err(e) => return Err(HibernateError::FileIoError("Failed to read".to_string(), e)),
@@ -82,10 +74,11 @@ impl HibernateCookie {
         // This would catch cases like writing to the wrong place or the
         // GPT layout/location changing. This might need enlightenment for a
         // disk with 4kb blocks, this check will let us know that too.
-        let gpt_sig_offset = self.offset + GPT_MAGIC_OFFSET;
+        let gpt_sig_offset = GPT_MAGIC_OFFSET;
         let gpt_sig_offset_end = gpt_sig_offset + 8;
         let mut gpt_sig = [0u8; 8];
-        gpt_sig.copy_from_slice(&self.buf[gpt_sig_offset..gpt_sig_offset_end]);
+        let buffer_slice = self.buffer.u8_slice();
+        gpt_sig.copy_from_slice(&buffer_slice[gpt_sig_offset..gpt_sig_offset_end]);
         let gpt_sig = u64::from_le_bytes(gpt_sig);
         if gpt_sig != GPT_MAGIC {
             return Err(HibernateError::CookieError(format!(
@@ -94,9 +87,9 @@ impl HibernateCookie {
             )));
         }
 
-        let magic_start = self.offset + HIBERNATE_MAGIC_OFFSET;
+        let magic_start = HIBERNATE_MAGIC_OFFSET;
         let magic_end = magic_start + HIBERNATE_MAGIC_SIZE;
-        let equal = self.buf[magic_start..magic_end] == *HIBERNATE_MAGIC.as_bytes();
+        let equal = buffer_slice[magic_start..magic_end] == *HIBERNATE_MAGIC.as_bytes();
         Ok(equal)
     }
 
@@ -110,17 +103,17 @@ impl HibernateCookie {
             return Ok(());
         }
 
-        let magic_start = self.offset + HIBERNATE_MAGIC_OFFSET;
+        let magic_start = HIBERNATE_MAGIC_OFFSET;
         let magic_end = magic_start + HIBERNATE_MAGIC_SIZE;
         let cookie = match valid {
             true => HIBERNATE_MAGIC,
             false => HIBERNATE_MAGIC_POISON,
         };
 
-        self.buf[magic_start..magic_end].copy_from_slice(cookie.as_bytes());
-        let start = self.offset;
-        let end = start + HIBERNATE_COOKIE_WRITE_SIZE;
-        let slice = [IoSlice::new(&self.buf[start..end])];
+        let buffer_slice = self.buffer.u8_slice_mut();
+        buffer_slice[magic_start..magic_end].copy_from_slice(cookie.as_bytes());
+        let end = HIBERNATE_COOKIE_WRITE_SIZE;
+        let slice = [IoSlice::new(&buffer_slice[..end])];
         let bytes_written = match self.blockdev.write_vectored(&slice) {
             Ok(s) => s,
             Err(e) => {

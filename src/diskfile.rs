@@ -5,30 +5,24 @@
 //! Implement support for accessing file contents directly via the underlying block device.
 
 use crate::fiemap::{Fiemap, FiemapExtent};
-use crate::hiberutil::{
-    buffer_alignment_offset, path_to_stateful_part, HibernateError, Result, DIRECT_IO_ALIGNMENT,
-};
+use crate::hiberutil::{get_page_size, path_to_stateful_part, HibernateError, Result};
+use crate::mmapbuf::MmapBuffer;
 use crate::{debug, error};
 use std::fs::{File, OpenOptions};
 use std::io::{Error as IoError, ErrorKind, IoSlice, IoSliceMut, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::OpenOptionsExt;
 
-static DISK_FILE_ALIGNMENT: usize = DIRECT_IO_ALIGNMENT;
-
 pub struct BouncedDiskFile {
     disk_file: DiskFile,
-    buf: Vec<u8>,
-    offset: usize,
+    buffer: MmapBuffer,
 }
 
 impl BouncedDiskFile {
     pub fn new(fs_file: &mut File, block_file: Option<File>) -> Result<BouncedDiskFile> {
-        let buf = vec![0u8; DISK_FILE_ALIGNMENT * 2];
-        let offset = buffer_alignment_offset(&buf, DISK_FILE_ALIGNMENT);
+        let page_size = get_page_size();
         Ok(BouncedDiskFile {
             disk_file: DiskFile::new(fs_file, block_file)?,
-            buf,
-            offset,
+            buffer: MmapBuffer::new(page_size)?,
         })
     }
 
@@ -46,23 +40,23 @@ impl Read for BouncedDiskFile {
         let mut offset = 0usize;
         let length = buf.len();
         while offset < length {
-            let mut size_this_round = DISK_FILE_ALIGNMENT;
+            let mut size_this_round = self.buffer.len();
             if size_this_round > (length - offset) {
                 size_this_round = length - offset;
             }
 
             // Read into the aligned buffer.
-            let src_end = self.offset + size_this_round;
-            let mut slice = [IoSliceMut::new(&mut self.buf[self.offset..src_end])];
+            let src_end = size_this_round;
+            let buffer_slice = self.buffer.u8_slice_mut();
+            let mut slice = [IoSliceMut::new(&mut buffer_slice[..src_end])];
             let bytes_done = self.disk_file.read_vectored(&mut slice)?;
             if bytes_done == 0 {
                 break;
             }
 
             // Copy into the caller's buffer.
-            let src_end = self.offset + bytes_done;
             let dst_end = offset + bytes_done;
-            buf[offset..dst_end].copy_from_slice(&self.buf[self.offset..src_end]);
+            buf[offset..dst_end].copy_from_slice(&buffer_slice[..bytes_done]);
             offset += bytes_done;
         }
 
@@ -75,18 +69,18 @@ impl Write for BouncedDiskFile {
         let mut offset = 0usize;
         let length = buf.len();
         while offset < length {
-            let mut size_this_round = DISK_FILE_ALIGNMENT;
+            let mut size_this_round = self.buffer.len();
             if size_this_round > (length - offset) {
                 size_this_round = length - offset;
             }
 
             // Copy into the aligned buffer.
-            let dst_end = self.offset + size_this_round;
             let src_end = offset + size_this_round;
-            self.buf[self.offset..dst_end].copy_from_slice(&buf[offset..src_end]);
+            let buffer_slice = self.buffer.u8_slice_mut();
+            buffer_slice[..size_this_round].copy_from_slice(&buf[offset..src_end]);
 
             // Do the write.
-            let slice = [IoSlice::new(&self.buf[self.offset..dst_end])];
+            let slice = [IoSlice::new(&buffer_slice[..size_this_round])];
             let bytes_done = self.disk_file.write_vectored(&slice)?;
             if bytes_done == 0 {
                 break;

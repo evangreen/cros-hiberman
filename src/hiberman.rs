@@ -13,6 +13,7 @@ mod hibermeta;
 mod hiberutil;
 mod imagemover;
 mod keyman;
+mod mmapbuf;
 
 use cookie::set_hibernate_cookie;
 use crypto::CryptoWriter;
@@ -22,7 +23,7 @@ use hibermeta::{
     HibernateMetadata, HIBERNATE_META_FLAG_ENCRYPTED, HIBERNATE_META_FLAG_RESUMED,
     HIBERNATE_META_FLAG_RESUME_FAILED, HIBERNATE_META_FLAG_VALID,
 };
-use hiberutil::{path_to_stateful_block, HibernateError, Result};
+use hiberutil::{get_page_size, path_to_stateful_block, HibernateError, Result};
 pub use hiberutil::{HibernateOptions, ResumeOptions};
 use imagemover::ImageMover;
 use keyman::HibernateKeyManager;
@@ -91,10 +92,6 @@ fn get_fs_stats(path: &Path) -> Result<libc::statvfs> {
     }
 
     Ok(stats)
-}
-
-fn get_page_size() -> usize {
-    unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize }
 }
 
 fn get_total_memory_mb() -> Result<u32> {
@@ -454,7 +451,7 @@ fn write_image(context: &mut HibernateContext, options: &HibernateOptions) -> Re
             context.metadata.data_iv,
             true,
             page_size * BUFFER_PAGES,
-        );
+        )?;
         mover_dest = &mut encryptor;
         context.metadata.flags |= HIBERNATE_META_FLAG_ENCRYPTED;
         debug!("Added encryption");
@@ -469,7 +466,7 @@ fn write_image(context: &mut HibernateContext, options: &HibernateOptions) -> Re
         image_size,
         page_size,
         page_size * BUFFER_PAGES,
-    );
+    )?;
     writer.move_all()?;
     info!("Wrote {} MB", image_size / 1024 / 1024);
     context.metadata.image_size = image_size as u64;
@@ -491,7 +488,7 @@ fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()
             context.metadata.data_iv,
             false,
             page_size,
-        );
+        )?;
         mover_dest = &mut decryptor;
         debug!("Image is encrypted")
     } else {
@@ -510,7 +507,7 @@ fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()
         image_size as i64,
         page_size * BUFFER_PAGES,
         page_size,
-    );
+    )?;
     reader.move_all()?;
     info!("Read {} MB", image_size / 1024 / 1024);
     Ok(())
