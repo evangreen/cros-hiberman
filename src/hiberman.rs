@@ -14,6 +14,7 @@ mod hiberutil;
 mod imagemover;
 mod keyman;
 mod mmapbuf;
+mod preloader;
 
 use cookie::set_hibernate_cookie;
 use crypto::CryptoWriter;
@@ -28,6 +29,7 @@ pub use hiberutil::{HibernateOptions, ResumeOptions};
 use imagemover::ImageMover;
 use keyman::HibernateKeyManager;
 use libc::{self, c_int, c_ulong, c_void, loff_t};
+use preloader::ImagePreloader;
 use std::ffi::CString;
 use std::fs::{create_dir, metadata, File, OpenOptions};
 use std::io::{BufRead, BufReader, IoSliceMut, Read, Seek, SeekFrom, Write};
@@ -478,6 +480,20 @@ fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()
     let snap_dev = context.snap_dev.as_mut().unwrap();
     let image_size = context.metadata.image_size;
     debug!("Resume image is {} bytes", image_size);
+    let hiber_file = context.hiber_file.as_mut().unwrap();
+    let mover_source: &mut dyn Read;
+    let mut preloader;
+    if options.no_preloader {
+        info!("Not using preloader");
+        mover_source = hiber_file;
+    } else {
+        preloader = ImagePreloader::new(hiber_file, image_size);
+        debug!("Preloading hibernate image");
+        preloader.load_all_chunks()?;
+        debug!("Done preloading hibernate image");
+        mover_source = &mut preloader;
+    }
+
     let page_size = get_page_size();
     let mut mover_dest: &mut dyn Write = snap_dev;
     let mut decryptor;
@@ -502,14 +518,14 @@ fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()
 
     // Move from the image, which can read big chunks, to the snapshot dev, which only writes pages.
     let mut reader = ImageMover::new(
-        context.hiber_file.as_mut().unwrap(),
+        mover_source,
         mover_dest,
         image_size as i64,
         page_size * BUFFER_PAGES,
         page_size,
     )?;
     reader.move_all()?;
-    info!("Read {} MB", image_size / 1024 / 1024);
+    info!("Moved {} MB", image_size / 1024 / 1024);
     Ok(())
 }
 

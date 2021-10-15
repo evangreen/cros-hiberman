@@ -202,6 +202,7 @@ Options are:
     --unencrypted -- Allow unencrypted resume images. Useful only for
         measurement and debug scenarios.
     --test-keys -- Use test keys for debugging.
+    --no-preloader -- Do not use the ImagePreloader.
     --help -- Print this help text.
 "#;
 
@@ -224,6 +225,10 @@ fn hiberman_resume(args: &mut std::env::Args) -> std::result::Result<(), ()> {
 
             "--test-keys" => {
                 options.test_keys = true;
+            }
+
+            "--no-preloader" => {
+                options.no_preloader = true;
             }
 
             "--unencrypted" => {

@@ -100,6 +100,7 @@ pub struct ResumeOptions {
     pub dry_run: bool,
     pub unencrypted: bool,
     pub test_keys: bool,
+    pub no_preloader: bool,
 }
 
 impl ResumeOptions {
@@ -108,6 +109,9 @@ impl ResumeOptions {
             dry_run: false,
             unencrypted: false,
             test_keys: false,
+            // TODO: The preloader is temporarily disabled since resume runs out
+            // of memory with it. Fix this or remove the preloader.
+            no_preloader: true,
         }
     }
 }
@@ -118,6 +122,10 @@ pub unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
 
 pub fn get_page_size() -> usize {
     unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize }
+}
+
+pub fn get_available_pages() -> usize {
+    unsafe { libc::sysconf(libc::_SC_AVPHYS_PAGES) as usize }
 }
 
 // Return the underlying partition device the hibernate files reside on.
