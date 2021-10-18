@@ -15,6 +15,7 @@ mod imagemover;
 mod keyman;
 mod mmapbuf;
 mod preloader;
+mod splitter;
 
 use cookie::set_hibernate_cookie;
 use crypto::CryptoWriter;
@@ -24,12 +25,15 @@ use hibermeta::{
     HibernateMetadata, HIBERNATE_META_FLAG_ENCRYPTED, HIBERNATE_META_FLAG_RESUMED,
     HIBERNATE_META_FLAG_RESUME_FAILED, HIBERNATE_META_FLAG_VALID,
 };
-use hiberutil::{get_page_size, path_to_stateful_block, HibernateError, Result};
+use hiberutil::{
+    get_page_size, get_total_memory_pages, path_to_stateful_block, HibernateError, Result,
+};
 pub use hiberutil::{HibernateOptions, ResumeOptions};
 use imagemover::ImageMover;
 use keyman::HibernateKeyManager;
 use libc::{self, c_int, c_ulong, c_void, loff_t};
 use preloader::ImagePreloader;
+use splitter::{ImageJoiner, ImageSplitter, HIBER_HEADER_MAX_SIZE};
 use std::ffi::CString;
 use std::fs::{create_dir, metadata, File, OpenOptions};
 use std::io::{BufRead, BufReader, IoSliceMut, Read, Seek, SeekFrom, Write};
@@ -41,6 +45,7 @@ use std::path::Path;
 static HIBERNATE_DIR: &str = "/mnt/stateful_partition/unencrypted/hibernate";
 static HIBER_META_NAME: &str = "metadata";
 static HIBER_META_SIZE: i64 = 1024 * 1024 * 8;
+static HIBER_HEADER_NAME: &str = "header";
 static HIBER_DATA_NAME: &str = "hiberfile";
 static RESUME_LOG_FILE_NAME: &str = "resume_log";
 static SUSPEND_LOG_FILE_NAME: &str = "suspend_log";
@@ -65,6 +70,7 @@ static SNAPSHOT_POWER_OFF: c_ulong = 0x3310;
 static SNAPSHOT_CREATE_IMAGE: c_ulong = 0x40043311;
 
 struct HibernateContext {
+    header_file: Option<DiskFile>,
     hiber_file: Option<DiskFile>,
     meta_file: Option<BouncedDiskFile>,
     snap_dev: Option<File>,
@@ -72,6 +78,7 @@ struct HibernateContext {
 }
 
 struct ResumeContext {
+    header_file: Option<DiskFile>,
     hiber_file: Option<DiskFile>,
     meta_file: Option<BouncedDiskFile>,
     snap_dev: Option<File>,
@@ -98,13 +105,9 @@ fn get_fs_stats(path: &Path) -> Result<libc::statvfs> {
 
 fn get_total_memory_mb() -> Result<u32> {
     let pagesize = get_page_size() as i64;
-    let pagecount = unsafe { libc::sysconf(libc::_SC_PHYS_PAGES) as i64 };
+    let pagecount = get_total_memory_pages() as i64;
 
     debug!("Pagesize {} pagecount {}", pagesize, pagecount);
-    if pagecount <= 0 {
-        return Err(HibernateError::GetMemorySizeError());
-    }
-
     let mb = pagecount * pagesize / (1024 * 1024);
     if mb > 0xFFFFFFFF {
         Ok(0xFFFFFFFFu32)
@@ -151,6 +154,12 @@ fn preallocate_log_file(suspend: bool) -> Result<BouncedDiskFile> {
     BouncedDiskFile::new(&mut log_file, None)
 }
 
+fn preallocate_header_file() -> Result<DiskFile> {
+    let path = Path::new(HIBERNATE_DIR).join(HIBER_HEADER_NAME);
+    let mut file = preallocate_file(&path, HIBER_HEADER_MAX_SIZE)?;
+    DiskFile::new(&mut file, None)
+}
+
 fn preallocate_hiberfile() -> Result<DiskFile> {
     let hiberfile_path = Path::new(HIBERNATE_DIR).join(HIBER_DATA_NAME);
 
@@ -188,6 +197,12 @@ fn open_bounced_disk_file(path: &Path) -> Result<BouncedDiskFile> {
     };
 
     BouncedDiskFile::new(&mut file, None)
+}
+
+// Open a pre-existing header file, still with read and write permissions.
+fn open_header_file() -> Result<DiskFile> {
+    let path = Path::new(HIBERNATE_DIR).join(HIBER_HEADER_NAME);
+    open_disk_file(&path)
 }
 
 // Open a pre-existing hiberfile, still with read and write permissions.
@@ -462,9 +477,11 @@ fn write_image(context: &mut HibernateContext, options: &HibernateOptions) -> Re
     }
 
     debug!("Hibernate image is {} bytes", image_size);
+    let mut header_file = context.header_file.take().unwrap();
+    let mut splitter = ImageSplitter::new(&mut header_file, mover_dest, &mut context.metadata);
     let mut writer = ImageMover::new(
         snap_dev,
-        mover_dest,
+        &mut splitter,
         image_size,
         page_size,
         page_size * BUFFER_PAGES,
@@ -477,24 +494,45 @@ fn write_image(context: &mut HibernateContext, options: &HibernateOptions) -> Re
 }
 
 fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()> {
+    let page_size = get_page_size();
     let snap_dev = context.snap_dev.as_mut().unwrap();
-    let image_size = context.metadata.image_size;
+    let mut image_size = context.metadata.image_size;
     debug!("Resume image is {} bytes", image_size);
     let hiber_file = context.hiber_file.as_mut().unwrap();
+    let mut header_file = context.header_file.take().unwrap();
+    let mut joiner = ImageJoiner::new(&mut header_file, hiber_file);
     let mover_source: &mut dyn Read;
     let mut preloader;
     if options.no_preloader {
         info!("Not using preloader");
-        mover_source = hiber_file;
+        mover_source = &mut joiner;
     } else {
-        preloader = ImagePreloader::new(hiber_file, image_size);
+        preloader = ImagePreloader::new(&mut joiner, image_size);
+        // Pump the header pages directly into the kernel so the kernel gets
+        // first rights to allocate the space it needs. We'll preload using
+        // whatever memory is left.
+        let header_pages = context.metadata.pagemap_pages;
+        let header_size = header_pages as usize * page_size;
+        debug!(
+            "Loading {} header pages ({} bytes)",
+            header_pages, header_size
+        );
+        let mut mover = ImageMover::new(
+            &mut preloader,
+            snap_dev,
+            header_size as i64,
+            page_size * BUFFER_PAGES,
+            page_size,
+        )?;
+        mover.move_all()?;
+        drop(mover);
+        debug!("Done loading header");
+        image_size -= header_size as u64;
         debug!("Preloading hibernate image");
-        preloader.load_all_chunks()?;
-        debug!("Done preloading hibernate image");
+        preloader.load_into_available_memory()?;
         mover_source = &mut preloader;
     }
 
-    let page_size = get_page_size();
     let mut mover_dest: &mut dyn Write = snap_dev;
     let mut decryptor;
     if (context.metadata.flags & HIBERNATE_META_FLAG_ENCRYPTED) != 0 {
@@ -717,6 +755,7 @@ pub fn hibernate(options: &HibernateOptions) -> Result<()> {
     }
 
     let mut context = HibernateContext {
+        header_file: Some(preallocate_header_file()?),
         hiber_file: Some(preallocate_hiberfile()?),
         meta_file: Some(preallocate_metadata_file()?),
         snap_dev: None,
@@ -795,6 +834,7 @@ pub fn resume_inner(options: &ResumeOptions) -> Result<()> {
     let hiber_file = open_hiberfile()?;
     lock_process_memory()?;
     let mut resume_context = ResumeContext {
+        header_file: Some(open_header_file()?),
         hiber_file: Some(hiber_file),
         meta_file: Some(meta_file),
         metadata,

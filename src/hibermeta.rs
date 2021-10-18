@@ -55,6 +55,8 @@ pub struct HibernateMetadata {
     pub image_size: u64,
     // Flags. See HIBERNATE_META_FLAG_* definitions.
     pub flags: u32,
+    // Number of pages in the image's header and pagemap.
+    pub pagemap_pages: u32,
     // Hibernate symmetric encryption key.
     pub data_key: [u8; HIBERNATE_DATA_KEY_SIZE],
     // Hibernate symmetric encryption IV (chosen randomly).
@@ -79,6 +81,8 @@ pub struct PublicHibernateMetadata {
     magic: u64,
     // This must be set to HIBERNATE_META_VERSION.
     version: u32,
+    // Number of pages in the image's header and pagemap.
+    pagemap_pages: u32,
     // The size of the hibernate image data.
     image_size: u64,
     // Flags. See HIBERNATE_META_FLAG_* definitions.
@@ -99,6 +103,8 @@ pub struct PublicHibernateMetadata {
 pub struct PrivateHibernateMetadata {
     // This must be set to HIBERNATE_META_VERSION.
     version: u32,
+    // Number of pages in the image's header and pagemap.
+    pagemap_pages: u32,
     // The size of the hibernate image data.
     image_size: u64,
     // Flags. See HIBERNATE_META_FLAG_* definitions.
@@ -130,6 +136,7 @@ impl HibernateMetadata {
         Ok(Self {
             image_size: 0,
             flags: 0,
+            pagemap_pages: 0,
             data_key,
             data_iv,
             meta_iv,
@@ -164,6 +171,7 @@ impl HibernateMetadata {
         Ok(Self {
             image_size: pubdata.image_size,
             flags: pubdata.flags,
+            pagemap_pages: pubdata.pagemap_pages,
             data_key: [0u8; HIBERNATE_DATA_KEY_SIZE],
             data_iv: [0u8; HIBERNATE_DATA_IV_SIZE],
             meta_iv: pubdata.private_iv,
@@ -267,6 +275,13 @@ impl HibernateMetadata {
             )));
         }
 
+        if self.pagemap_pages != privdata.pagemap_pages {
+            return Err(HibernateError::MetadataError(format!(
+                "Mismatch in pagemap count: {:x?} vs {:x?}",
+                privdata.pagemap_pages, self.pagemap_pages
+            )));
+        }
+
         self.data_key = privdata.data_key;
         self.data_iv = privdata.data_iv;
         self.flags = privdata.flags;
@@ -319,6 +334,7 @@ impl HibernateMetadata {
         Ok(PublicHibernateMetadata {
             magic: HIBERNATE_META_MAGIC,
             version: HIBERNATE_META_VERSION,
+            pagemap_pages: self.pagemap_pages,
             image_size: self.image_size,
             flags: self.flags,
             meta_eph_public: self.meta_eph_public,
@@ -377,6 +393,7 @@ impl HibernateMetadata {
     fn build_private_data(&self) -> PrivateHibernateMetadata {
         PrivateHibernateMetadata {
             version: HIBERNATE_META_VERSION,
+            pagemap_pages: self.pagemap_pages,
             image_size: self.image_size,
             flags: self.flags,
             data_key: self.data_key,

@@ -6,15 +6,19 @@
 //! This is used to frontload potentially slow disk operations while we're stuck
 //! waiting for user input anyway, but not yet capable of decrypting.
 
-use crate::hiberutil::{get_available_pages, HibernateError, Result};
+use crate::hiberutil::{
+    get_available_pages, get_page_size, get_total_memory_pages, HibernateError, Result,
+};
 use crate::mmapbuf::MmapBuffer;
-use crate::warn;
+use crate::{debug, info, warn};
 use std::collections::LinkedList;
 use std::convert::TryInto;
-use std::io::{IoSliceMut, Read};
+use std::io::{Error as IoError, ErrorKind, IoSliceMut, Read};
 
 // Allocate buffers in chunks to keep things large but manageable.
 const PRELOADER_CHUNK_SIZE: usize = 1024 * 1024 * 2;
+// The minimum percent of memory to keep free.
+const RESERVE_MEMORY_PERCENT: usize = 6;
 
 pub struct ImagePreloader<'a> {
     source: &'a mut dyn Read,
@@ -51,12 +55,6 @@ impl<'a> ImagePreloader<'a> {
 
         let chunk = ImageChunk::new(self.source, chunk_size)?;
         self.size_loaded += chunk.size;
-        println!(
-            "Loaded {:x}, {:x}, {} pages available",
-            chunk.size,
-            self.size_loaded,
-            get_available_pages()
-        );
         if chunk.size == 0 {
             return Ok(true);
         }
@@ -65,10 +63,33 @@ impl<'a> ImagePreloader<'a> {
         Ok(self.size_loaded >= self.total_size)
     }
 
-    // Load all image chunks.
-    pub fn load_all_chunks(&mut self) -> Result<()> {
-        while self.size_loaded < self.total_size {
-            self.load_chunk()?;
+    // Load as many image chunks as possible without exhausting system memory.
+    pub fn load_into_available_memory(&mut self) -> Result<()> {
+        let total_pages = get_total_memory_pages();
+        let minimum_pages = total_pages * RESERVE_MEMORY_PERCENT / 100;
+        debug!(
+            "System has {} pages, preloading until there are {}",
+            total_pages, minimum_pages
+        );
+        loop {
+            // Load a chunk, or stop if all chunks are loaded.
+            if self.load_chunk()? {
+                debug!(
+                    "Preloaded entire image, still {} pages available.",
+                    get_available_pages()
+                );
+                break;
+            }
+
+            let available_pages = get_available_pages();
+            if available_pages <= minimum_pages {
+                info!(
+                    "Preloaded {}MB, leaving {}MB free memory",
+                    self.size_loaded / 1024 / 1024,
+                    get_available_pages() * get_page_size() / 1024 / 1024
+                );
+                break;
+            }
         }
 
         Ok(())
@@ -80,10 +101,30 @@ impl Read for ImagePreloader<'_> {
         let mut offset = 0usize;
         let length = buf.len();
         while offset < length {
-            let chunk = match self.chunks.front() {
-                Some(c) => c,
-                None => break,
-            };
+            // Load another chunk if the list is empty.
+            // Break out if it's the end.
+            if self.chunks.is_empty() {
+                match self.load_chunk() {
+                    Ok(finished) => {
+                        if finished {
+                            break;
+                        }
+                    }
+
+                    // TODO: Handle this better. The error is either a
+                    // HibernateError from MmapBuffer or a real std::io::Result
+                    // that got converted to a HibernateError. Maybe we should
+                    // return std::io::Result from everything?
+                    Err(e) => {
+                        return Err(IoError::new(
+                            ErrorKind::InvalidInput,
+                            format!("I/O error: {}", e),
+                        ))
+                    }
+                }
+            }
+
+            let chunk = self.chunks.front().unwrap();
 
             assert!(self.chunk_offset < chunk.size);
 
@@ -140,15 +181,5 @@ impl ImageChunk {
             buffer,
             size: bytes_read,
         })
-    }
-}
-
-impl Drop for ImageChunk {
-    fn drop(&mut self) {
-        println!(
-            "Drop {:x}, {} available pages",
-            self.size,
-            get_available_pages()
-        );
     }
 }

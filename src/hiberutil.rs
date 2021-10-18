@@ -4,7 +4,7 @@
 
 //! Implement common functions and definitions used throughout the app and library.
 
-use crate::error;
+use crate::{error, warn};
 use std::process::Command;
 use thiserror::Error as ThisError;
 
@@ -31,9 +31,6 @@ pub enum HibernateError {
     /// Error getting the fiemap
     #[error("Error getting the fiemap: {0}")]
     FiemapError(sys_util::Error),
-    /// Failed to get physical memory size.
-    #[error("Failed to get the physical memory sizd")]
-    GetMemorySizeError(),
     /// Invalid fiemap
     #[error("Invalid fiemap: {0}")]
     InvalidFiemapError(String),
@@ -109,9 +106,7 @@ impl ResumeOptions {
             dry_run: false,
             unencrypted: false,
             test_keys: false,
-            // TODO: The preloader is temporarily disabled since resume runs out
-            // of memory with it. Fix this or remove the preloader.
-            no_preloader: true,
+            no_preloader: false,
         }
     }
 }
@@ -126,6 +121,19 @@ pub fn get_page_size() -> usize {
 
 pub fn get_available_pages() -> usize {
     unsafe { libc::sysconf(libc::_SC_AVPHYS_PAGES) as usize }
+}
+
+pub fn get_total_memory_pages() -> usize {
+    let pagecount = unsafe { libc::sysconf(libc::_SC_PHYS_PAGES) as usize };
+    if pagecount <= 0 {
+        warn!(
+            "Failed to get total memory (got {}). Assuming 4GB.",
+            pagecount
+        );
+        return 1024 * 1024 / get_page_size() * 1024 * 4;
+    }
+
+    pagecount
 }
 
 // Return the underlying partition device the hibernate files reside on.
