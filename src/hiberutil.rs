@@ -16,6 +16,9 @@ pub enum HibernateError {
     /// Failed to create the hibernate context directory.
     #[error("Failed to create directory: {0}: {1}")]
     CreateDirectoryError(String, std::io::Error),
+    /// Dbus error
+    #[error("Dbus error: {0}")]
+    DbusError(String),
     /// Failed to do an I/O operation on a file
     #[error("Failed file operation: {0}: {1}")]
     FileIoError(String, std::io::Error),

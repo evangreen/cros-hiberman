@@ -6,6 +6,7 @@
 
 pub mod cookie;
 mod crypto;
+mod dbus;
 mod diskfile;
 mod fiemap;
 pub mod hiberlog;
@@ -17,6 +18,7 @@ mod mmapbuf;
 mod preloader;
 mod splitter;
 
+use crate::dbus::HiberDbusConnection;
 use cookie::set_hibernate_cookie;
 use crypto::CryptoWriter;
 use diskfile::{BouncedDiskFile, DiskFile};
@@ -83,6 +85,8 @@ struct ResumeContext {
     meta_file: Option<BouncedDiskFile>,
     snap_dev: Option<File>,
     metadata: HibernateMetadata,
+    dbus_connection: HiberDbusConnection,
+    key_manager: HibernateKeyManager,
 }
 
 fn get_fs_stats(path: &Path) -> Result<libc::statvfs> {
@@ -502,6 +506,8 @@ fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()
     let mut header_file = context.header_file.take().unwrap();
     let mut joiner = ImageJoiner::new(&mut header_file, hiber_file);
     let mover_source: &mut dyn Read;
+
+    // Fire up the preloader to start loading pages off of disk right away.
     let mut preloader;
     if options.no_preloader {
         info!("Not using preloader");
@@ -533,6 +539,40 @@ fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()
         mover_source = &mut preloader;
     }
 
+    // Now that as much data as possible has been preloaded from disk, the next
+    // step is to start decrypting it and push it to the kernel. Block waiting
+    // on the authentication key material from cryptohome.
+    let key_manager = &mut context.key_manager;
+    let metadata = &mut context.metadata;
+    if options.test_keys {
+        key_manager.use_test_keys()?;
+    } else {
+        let got_seed_already = context.dbus_connection.has_seed_material();
+        if !got_seed_already {
+            debug!("Waiting for seed material");
+            // Also print it to the console for the poor souls testing manually.
+            // If you're stuck here, use --test-keys to skip this part, or
+            // manually send something like this:
+            // dbus-send --system --type=method_call --print-reply
+            //    --dest=org.chromium.Hibernate /org/chromium/HibernateSeed
+            //    org.chromium.HibernateSeedInterface.SetSeedMaterial
+            //    "array:byte:0x31,0x32,0x33,0x34,.... (32 bytes)"
+            println!("Waiting for seed material");
+        }
+
+        let seed = context.dbus_connection.get_seed_material()?;
+        if !got_seed_already {
+            debug!("Got seed material");
+            // Use an exclamation point to congratulate that poor soul who's
+            // been stuck here all afternoon.
+            println!("Got seed material!")
+        }
+        key_manager.set_private_key(&seed)?;
+    }
+
+    info!("Loading private metadata");
+    key_manager.install_saved_metadata_key(metadata)?;
+    metadata.load_private_data()?;
     let mut mover_dest: &mut dyn Write = snap_dev;
     let mut decryptor;
     if (context.metadata.flags & HIBERNATE_META_FLAG_ENCRYPTED) != 0 {
@@ -809,21 +849,12 @@ pub fn resume_inner(options: &ResumeOptions) -> Result<()> {
     info!("Clearing hibernate cookie at '{}'", block_path);
     set_hibernate_cookie(Some(&block_path), false)?;
     info!("Cleared cookie");
+    // Fire up the dbus server.
+    let mut dbus_connection = HiberDbusConnection::new()?;
+    dbus_connection.spawn_dbus_server()?;
     let mut meta_file = open_metafile()?;
     debug!("Loading metadata");
-    let mut metadata = HibernateMetadata::load_from_disk(&mut meta_file)?;
-    let mut key_manager = HibernateKeyManager::new();
-    if options.test_keys {
-        key_manager.use_test_keys()?;
-        key_manager.install_saved_metadata_key(&mut metadata)?;
-    } else {
-        error!("Gathering key material from cryptohome net yet implemented.");
-        return Err(HibernateError::MetadataError(
-            "TODO: Implement real keying".to_string(),
-        ));
-    }
-
-    metadata.load_private_data()?;
+    let metadata = HibernateMetadata::load_from_disk(&mut meta_file)?;
     if (metadata.flags & HIBERNATE_META_FLAG_VALID) == 0 {
         return Err(HibernateError::MetadataError(
             "No valid hibernate image".to_string(),
@@ -839,6 +870,8 @@ pub fn resume_inner(options: &ResumeOptions) -> Result<()> {
         meta_file: Some(meta_file),
         metadata,
         snap_dev: None,
+        dbus_connection,
+        key_manager: HibernateKeyManager::new(),
     };
 
     let result = resume_system(&mut resume_context, options);
