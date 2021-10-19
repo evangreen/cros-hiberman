@@ -79,13 +79,13 @@ struct HibernateContext {
     metadata: HibernateMetadata,
 }
 
-struct ResumeContext {
+struct ResumeContext<'a> {
     header_file: Option<DiskFile>,
     hiber_file: Option<DiskFile>,
     meta_file: Option<BouncedDiskFile>,
     snap_dev: Option<File>,
     metadata: HibernateMetadata,
-    dbus_connection: HiberDbusConnection,
+    dbus_connection: &'a mut HiberDbusConnection,
     key_manager: HibernateKeyManager,
 }
 
@@ -497,6 +497,34 @@ fn write_image(context: &mut HibernateContext, options: &HibernateOptions) -> Re
     Ok(())
 }
 
+fn populate_seed(
+    dbus_connection: &mut HiberDbusConnection,
+    key_manager: &mut HibernateKeyManager,
+) -> Result<()> {
+    let got_seed_already = dbus_connection.has_seed_material();
+    if !got_seed_already {
+        debug!("Waiting for seed material");
+        // Also print it to the console for the poor souls testing manually.
+        // If you're stuck here, use --test-keys to skip this part, or
+        // manually send something like this:
+        // dbus-send --system --type=method_call --print-reply
+        //    --dest=org.chromium.Hibernate /org/chromium/HibernateSeed
+        //    org.chromium.HibernateSeedInterface.SetSeedMaterial
+        //    "array:byte:0x31,0x32,0x33,0x34,.... (32 bytes)"
+        println!("Waiting for seed material");
+    }
+
+    let seed = dbus_connection.get_seed_material()?;
+    if !got_seed_already {
+        debug!("Got seed material");
+        // Use an exclamation point to congratulate that poor soul who's
+        // been stuck here all afternoon.
+        println!("Got seed material!")
+    }
+
+    key_manager.set_private_key(&seed)
+}
+
 fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()> {
     let page_size = get_page_size();
     let snap_dev = context.snap_dev.as_mut().unwrap();
@@ -547,27 +575,7 @@ fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()
     if options.test_keys {
         key_manager.use_test_keys()?;
     } else {
-        let got_seed_already = context.dbus_connection.has_seed_material();
-        if !got_seed_already {
-            debug!("Waiting for seed material");
-            // Also print it to the console for the poor souls testing manually.
-            // If you're stuck here, use --test-keys to skip this part, or
-            // manually send something like this:
-            // dbus-send --system --type=method_call --print-reply
-            //    --dest=org.chromium.Hibernate /org/chromium/HibernateSeed
-            //    org.chromium.HibernateSeedInterface.SetSeedMaterial
-            //    "array:byte:0x31,0x32,0x33,0x34,.... (32 bytes)"
-            println!("Waiting for seed material");
-        }
-
-        let seed = context.dbus_connection.get_seed_material()?;
-        if !got_seed_already {
-            debug!("Got seed material");
-            // Use an exclamation point to congratulate that poor soul who's
-            // been stuck here all afternoon.
-            println!("Got seed material!")
-        }
-        key_manager.set_private_key(&seed)?;
+        populate_seed(&mut context.dbus_connection, key_manager)?;
     }
 
     info!("Loading private metadata");
@@ -842,16 +850,13 @@ pub fn hibernate(options: &HibernateOptions) -> Result<()> {
     result
 }
 
-pub fn resume_inner(options: &ResumeOptions) -> Result<()> {
+fn resume_inner(options: &ResumeOptions, dbus_connection: &mut HiberDbusConnection) -> Result<()> {
     // Clear the cookie near the start to avoid situations where we repeatedly
     // try to resume but fail.
     let block_path = path_to_stateful_block()?;
     info!("Clearing hibernate cookie at '{}'", block_path);
     set_hibernate_cookie(Some(&block_path), false)?;
     info!("Cleared cookie");
-    // Fire up the dbus server.
-    let mut dbus_connection = HiberDbusConnection::new()?;
-    dbus_connection.spawn_dbus_server()?;
     let mut meta_file = open_metafile()?;
     debug!("Loading metadata");
     let metadata = HibernateMetadata::load_from_disk(&mut meta_file)?;
@@ -879,15 +884,34 @@ pub fn resume_inner(options: &ResumeOptions) -> Result<()> {
     result
 }
 
+fn save_public_key(dbus_connection: &mut HiberDbusConnection) -> Result<()> {
+    info!("Saving public key for future hibernate");
+    let mut key_manager = HibernateKeyManager::new();
+    populate_seed(dbus_connection, &mut key_manager)?;
+    key_manager.save_public_key()
+}
+
 pub fn resume(options: &ResumeOptions) -> Result<()> {
     info!("Beginning resume");
+    // Fire up the dbus server.
+    let mut dbus_connection = HiberDbusConnection::new()?;
+    dbus_connection.spawn_dbus_server()?;
     // Start keeping logs in memory, anticipating success.
     redirect_log(HiberlogOut::BufferInMemory, None);
-    let result = resume_inner(options);
+    let mut result = resume_inner(options, &mut dbus_connection);
     // Replay earlier logs first.
     replay_logs(true);
     // Then move pending and future logs to syslog.
     redirect_log(HiberlogOut::Syslog, None);
+    // Unless the test keys are being used, wait for the key material from
+    // cryptohome and save the public portion for a later hibernate.
+    if !options.test_keys {
+        let save_result = save_public_key(&mut dbus_connection);
+        if matches!(result, Ok(())) {
+            result = save_result;
+        }
+    }
+
     result
 }
 
