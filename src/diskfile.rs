@@ -33,6 +33,10 @@ impl BouncedDiskFile {
     pub fn sync_all(&self) -> std::io::Result<()> {
         self.disk_file.sync_all()
     }
+
+    pub fn rewind(&mut self) -> Result<()> {
+        self.disk_file.rewind()
+    }
 }
 
 impl Read for BouncedDiskFile {
@@ -165,6 +169,13 @@ impl DiskFile {
 
     pub fn sync_all(&self) -> std::io::Result<()> {
         self.blockdev.sync_all()
+    }
+
+    pub fn rewind(&mut self) -> Result<()> {
+        match self.seek(SeekFrom::Start(0)) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(HibernateError::FileIoError("Failed to seek".to_string(), e))
+        }
     }
 
     fn current_position_valid(&self) -> bool {

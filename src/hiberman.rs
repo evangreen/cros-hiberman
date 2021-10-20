@@ -25,7 +25,7 @@ use diskfile::{BouncedDiskFile, DiskFile};
 use hiberlog::{flush_log, redirect_log, replay_log_file, reset_log, HiberlogOut};
 use hibermeta::{
     HibernateMetadata, HIBERNATE_HASH_SIZE, HIBERNATE_META_FLAG_ENCRYPTED,
-    HIBERNATE_META_FLAG_RESUMED, HIBERNATE_META_FLAG_RESUME_FAILED, HIBERNATE_META_FLAG_VALID,
+    HIBERNATE_META_FLAG_RESUME_STARTED, HIBERNATE_META_FLAG_RESUME_LAUNCHED, HIBERNATE_META_FLAG_RESUME_FAILED, HIBERNATE_META_FLAG_VALID,
 };
 use hiberutil::{
     get_page_size, get_total_memory_pages, path_to_stateful_block, HibernateError, Result,
@@ -651,6 +651,7 @@ fn snapshot_and_save(context: &mut HibernateContext, options: &HibernateOptions)
         // Drop the hiber_file.
         context.hiber_file.take();
         let mut meta_file = context.meta_file.take().unwrap();
+        meta_file.rewind()?;
         context.metadata.write_to_disk(&mut meta_file)?;
         drop(meta_file);
         // Set the hibernate cookie so the next boot knows to start in RO mode.
@@ -749,8 +750,9 @@ fn launch_resume_image(context: &mut ResumeContext) -> Result<()> {
     // Clear the valid flag and set the resume flag to indicate this image was resumed into.
     let metadata = &mut context.metadata;
     metadata.flags &= !HIBERNATE_META_FLAG_VALID;
-    metadata.flags |= HIBERNATE_META_FLAG_RESUMED;
+    metadata.flags |= HIBERNATE_META_FLAG_RESUME_LAUNCHED;
     let mut meta_file = context.meta_file.take().unwrap();
+    meta_file.rewind()?;
     metadata.write_to_disk(&mut meta_file)?;
     if let Err(e) = meta_file.sync_all() {
         return Err(HibernateError::FileSyncError(
@@ -772,6 +774,7 @@ fn launch_resume_image(context: &mut ResumeContext) -> Result<()> {
     error!("Resume failed");
     // If we are still executing then the resume failed. Mark it as such.
     metadata.flags |= HIBERNATE_META_FLAG_RESUME_FAILED;
+    meta_file.rewind()?;
     metadata.write_to_disk(&mut meta_file)?;
     result
 }
@@ -882,11 +885,24 @@ fn resume_inner(options: &ResumeOptions, dbus_connection: &mut HiberDbusConnecti
     info!("Cleared cookie");
     let mut meta_file = open_metafile()?;
     debug!("Loading metadata");
-    let metadata = HibernateMetadata::load_from_disk(&mut meta_file)?;
+    let mut metadata = HibernateMetadata::load_from_disk(&mut meta_file)?;
     if (metadata.flags & HIBERNATE_META_FLAG_VALID) == 0 {
         return Err(HibernateError::MetadataError(
             "No valid hibernate image".to_string(),
         ));
+    }
+
+    // Mark that resume was attempted on this image in case it's the last thing
+    // we do! This also clears out the private metadata on disk, getting the
+    // (encrypted) data key off of disk. If this is just a dry run, don't make
+    // any changes.
+    metadata.dont_save_private_data();
+    if !options.dry_run {
+        metadata.flags &= !HIBERNATE_META_FLAG_VALID;
+        metadata.flags |= HIBERNATE_META_FLAG_RESUME_STARTED;
+        debug!("Clearing valid flag on metadata: {:x}", metadata.flags);
+        meta_file.rewind()?;
+        metadata.write_to_disk(&mut meta_file)?;
     }
 
     debug!("Opening hiberfile");

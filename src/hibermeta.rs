@@ -20,20 +20,25 @@ const HIBERNATE_META_VERSION: u32 = 1;
 // This flag is set if the hibernate image is valid and ready to be resumed to.
 pub const HIBERNATE_META_FLAG_VALID: u32 = 0x00000001;
 
-// This flag is set if the image has already been resumed once. When this flag
-// is set the VALID flag is cleared.
-pub const HIBERNATE_META_FLAG_RESUMED: u32 = 0x00000002;
+// This flag is set if the image has already been attempted for resume. When
+// this flag is set the VALID flag is cleared.
+pub const HIBERNATE_META_FLAG_RESUME_STARTED: u32 = 0x00000002;
+
+// This flag is set if the image was fully loaded and a resume launch was
+// attempted.
+pub const HIBERNATE_META_FLAG_RESUME_LAUNCHED: u32 = 0x00000004;
 
 // This flag is set if the image has already been resumed into, but the resume
 // attempt failed. The RESUMED flag will also be set.
-pub const HIBERNATE_META_FLAG_RESUME_FAILED: u32 = 0x00000004;
+pub const HIBERNATE_META_FLAG_RESUME_FAILED: u32 = 0x00000008;
 
 // This flag is set if the image is encrypted.
-pub const HIBERNATE_META_FLAG_ENCRYPTED: u32 = 0x00000008;
+pub const HIBERNATE_META_FLAG_ENCRYPTED: u32 = 0x00000010;
 
 // Define the mask of all valid flags.
 pub const HIBERNATE_META_VALID_FLAGS: u32 = HIBERNATE_META_FLAG_VALID
-    | HIBERNATE_META_FLAG_RESUMED
+    | HIBERNATE_META_FLAG_RESUME_STARTED
+    | HIBERNATE_META_FLAG_RESUME_LAUNCHED
     | HIBERNATE_META_FLAG_RESUME_FAILED
     | HIBERNATE_META_FLAG_ENCRYPTED;
 
@@ -75,6 +80,10 @@ pub struct HibernateMetadata {
     private_blob: Option<[u8; HIBERNATE_META_PRIVATE_SIZE]>,
     // The key used to decrypt private metadata.
     meta_key: Option<[u8; HIBERNATE_DATA_KEY_SIZE]>,
+    // Define whether or not to save private data to disk anymore or not. This
+    // can be cleared when the metadata is only being written out as a debugging
+    // breadcrumb.
+    save_private_data: bool,
 }
 
 // Define the structure of the public hibernate metadata, which is written
@@ -151,6 +160,7 @@ impl HibernateMetadata {
             meta_eph_public,
             private_blob: None,
             meta_key: None,
+            save_private_data: true,
         })
     }
 
@@ -187,6 +197,7 @@ impl HibernateMetadata {
             meta_key: None,
             meta_eph_public: pubdata.meta_eph_public,
             private_blob: Some(pubdata.private),
+            save_private_data: true,
         })
     }
 
@@ -224,7 +235,7 @@ impl HibernateMetadata {
     pub fn load_private_data(&mut self) -> Result<()> {
         if matches!(self.meta_key, None) {
             return Err(HibernateError::MetadataError(
-                "Meta key not set".to_string(),
+                "Cannot load private data without meta key".to_string(),
             ));
         }
 
@@ -298,6 +309,9 @@ impl HibernateMetadata {
         Ok(())
     }
 
+    // Save the current metadata contents to disk. If dont_save_private_data()
+    // has been called, then only the public portions are saved, and the private
+    // portions are zeroed.
     pub fn write_to_disk(&self, disk_file: &mut BouncedDiskFile) -> Result<()> {
         let mut buf = vec![0u8; 4096];
 
@@ -312,7 +326,7 @@ impl HibernateMetadata {
 
         assert!(buf.len() >= std::mem::size_of::<PublicHibernateMetadata>());
 
-        let public_data = self.build_public_data()?;
+        let public_data = self.build_public_data(self.save_private_data)?;
         unsafe {
             // Copy the struct into the beginning of the u8 buffer. This is safe
             // because the buffer was allocated to be larger than this struct
@@ -340,16 +354,35 @@ impl HibernateMetadata {
         Ok(())
     }
 
-    fn build_public_data(&self) -> Result<PublicHibernateMetadata> {
+    pub fn dont_save_private_data(&mut self) {
+        self.save_private_data = false;
+    }
+
+    fn build_public_data(&self, include_private: bool) -> Result<PublicHibernateMetadata> {
+        let private = match include_private {
+            true => self.build_private_buffer()?,
+            false => [0u8; HIBERNATE_META_PRIVATE_SIZE]
+        };
+
+        let private_iv = match include_private {
+            true => self.meta_iv,
+            false => [0u8; HIBERNATE_DATA_IV_SIZE]
+        };
+
+        let meta_eph_public = match include_private {
+            true => self.meta_eph_public,
+            false => [0u8; HIBERNATE_META_KEY_SIZE]
+        };
+
         Ok(PublicHibernateMetadata {
             magic: HIBERNATE_META_MAGIC,
             version: HIBERNATE_META_VERSION,
             pagemap_pages: self.pagemap_pages,
             image_size: self.image_size,
             flags: self.flags,
-            meta_eph_public: self.meta_eph_public,
-            private_iv: self.meta_iv,
-            private: self.build_private_buffer()?,
+            meta_eph_public,
+            private_iv,
+            private,
         })
     }
 
@@ -360,7 +393,7 @@ impl HibernateMetadata {
 
         if matches!(self.meta_key, None) {
             return Err(HibernateError::MetadataError(
-                "Meta key not set".to_string(),
+                "Cannot build private metadata without meta key".to_string(),
             ));
         }
 
