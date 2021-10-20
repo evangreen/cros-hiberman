@@ -24,8 +24,8 @@ use crypto::CryptoWriter;
 use diskfile::{BouncedDiskFile, DiskFile};
 use hiberlog::{flush_log, redirect_log, replay_log_file, reset_log, HiberlogOut};
 use hibermeta::{
-    HibernateMetadata, HIBERNATE_META_FLAG_ENCRYPTED, HIBERNATE_META_FLAG_RESUMED,
-    HIBERNATE_META_FLAG_RESUME_FAILED, HIBERNATE_META_FLAG_VALID,
+    HibernateMetadata, HIBERNATE_HASH_SIZE, HIBERNATE_META_FLAG_ENCRYPTED,
+    HIBERNATE_META_FLAG_RESUMED, HIBERNATE_META_FLAG_RESUME_FAILED, HIBERNATE_META_FLAG_VALID,
 };
 use hiberutil::{
     get_page_size, get_total_memory_pages, path_to_stateful_block, HibernateError, Result,
@@ -583,11 +583,11 @@ fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()
     metadata.load_private_data()?;
     let mut mover_dest: &mut dyn Write = snap_dev;
     let mut decryptor;
-    if (context.metadata.flags & HIBERNATE_META_FLAG_ENCRYPTED) != 0 {
+    if (metadata.flags & HIBERNATE_META_FLAG_ENCRYPTED) != 0 {
         decryptor = CryptoWriter::new(
             snap_dev,
-            context.metadata.data_key,
-            context.metadata.data_iv,
+            metadata.data_key,
+            metadata.data_iv,
             false,
             page_size,
         )?;
@@ -612,6 +612,29 @@ fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()
     )?;
     reader.move_all()?;
     info!("Moved {} MB", image_size / 1024 / 1024);
+    // Check the header pages hash. Ideally this would be done just after the
+    // private data was loaded, but by then we've handed a mutable borrow out to
+    // the mover source. This is fine too, as the kernel will reject writes if
+    // the page list size is different. The worst an attacker can do is move
+    // pages around to other RAM locations (the kernel ensures the pages are
+    // RAM). The check here ensures we'll never jump into anything but the
+    // original header.
+    debug!("Validating header content");
+    let mut header_hash = [0u8; HIBERNATE_HASH_SIZE];
+    let header_pages = joiner.get_header_hash(&mut header_hash);
+    if (header_pages == 0) || ((metadata.pagemap_pages as usize) != header_pages) {
+        error!(
+            "Metadata had {} pages, but {} were loaded",
+            metadata.pagemap_pages, header_pages
+        );
+        return Err(HibernateError::HeaderContentLengthMismatch());
+    }
+
+    if metadata.header_hash != header_hash {
+        error!("Metadata header hash mismatch");
+        return Err(HibernateError::HeaderContentHashMismatch());
+    }
+
     Ok(())
 }
 

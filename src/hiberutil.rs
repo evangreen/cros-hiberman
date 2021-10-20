@@ -34,6 +34,12 @@ pub enum HibernateError {
     /// Error getting the fiemap
     #[error("Error getting the fiemap: {0}")]
     FiemapError(sys_util::Error),
+    /// Header content hash mismatch
+    #[error("Header content hash mismatch")]
+    HeaderContentHashMismatch(),
+    /// Header content length mismatch
+    #[error("Header content length mismatch")]
+    HeaderContentLengthMismatch(),
     /// Invalid fiemap
     #[error("Invalid fiemap: {0}")]
     InvalidFiemapError(String),

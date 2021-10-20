@@ -37,6 +37,9 @@ pub const HIBERNATE_META_VALID_FLAGS: u32 = HIBERNATE_META_FLAG_VALID
     | HIBERNATE_META_FLAG_RESUME_FAILED
     | HIBERNATE_META_FLAG_ENCRYPTED;
 
+// Define the size of the hash field in the metadata.
+pub const HIBERNATE_HASH_SIZE: usize = 32;
+
 // Define the size of the hibernate data symmetric encryption key.
 pub const HIBERNATE_DATA_KEY_SIZE: usize = 16;
 pub const HIBERNATE_DATA_IV_SIZE: usize = HIBERNATE_DATA_KEY_SIZE;
@@ -57,6 +60,8 @@ pub struct HibernateMetadata {
     pub flags: u32,
     // Number of pages in the image's header and pagemap.
     pub pagemap_pages: u32,
+    // Hash of the header pages.
+    pub header_hash: [u8; HIBERNATE_HASH_SIZE],
     // Hibernate symmetric encryption key.
     pub data_key: [u8; HIBERNATE_DATA_KEY_SIZE],
     // Hibernate symmetric encryption IV (chosen randomly).
@@ -113,6 +118,8 @@ pub struct PrivateHibernateMetadata {
     data_key: [u8; HIBERNATE_DATA_KEY_SIZE],
     // Hibernate symmetric encryption IV (chosen randomly).
     data_iv: [u8; HIBERNATE_DATA_IV_SIZE],
+    // Hash of the header pages.
+    header_hash: [u8; HIBERNATE_HASH_SIZE],
 }
 
 impl HibernateMetadata {
@@ -137,6 +144,7 @@ impl HibernateMetadata {
             image_size: 0,
             flags: 0,
             pagemap_pages: 0,
+            header_hash: [0u8; HIBERNATE_HASH_SIZE],
             data_key,
             data_iv,
             meta_iv,
@@ -172,6 +180,7 @@ impl HibernateMetadata {
             image_size: pubdata.image_size,
             flags: pubdata.flags,
             pagemap_pages: pubdata.pagemap_pages,
+            header_hash: [0u8; HIBERNATE_HASH_SIZE],
             data_key: [0u8; HIBERNATE_DATA_KEY_SIZE],
             data_iv: [0u8; HIBERNATE_DATA_IV_SIZE],
             meta_iv: pubdata.private_iv,
@@ -282,6 +291,7 @@ impl HibernateMetadata {
             )));
         }
 
+        self.header_hash = privdata.header_hash;
         self.data_key = privdata.data_key;
         self.data_iv = privdata.data_iv;
         self.flags = privdata.flags;
@@ -398,6 +408,7 @@ impl HibernateMetadata {
             flags: self.flags,
             data_key: self.data_key,
             data_iv: self.data_iv,
+            header_hash: self.header_hash,
         }
     }
 

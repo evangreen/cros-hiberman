@@ -19,8 +19,9 @@
 //! verify its hash to detect tampering.
 
 use crate::debug;
-use crate::hibermeta::HibernateMetadata;
+use crate::hibermeta::{HibernateMetadata, HIBERNATE_HASH_SIZE};
 use crate::hiberutil::get_page_size;
+use openssl::hash::{Hasher, MessageDigest};
 use std::convert::TryInto;
 use std::io::{Error as IoError, ErrorKind, Read, Write};
 
@@ -63,6 +64,7 @@ pub struct ImageSplitter<'a> {
     page_size: usize,
     meta_pages: usize,
     pages_done: usize,
+    hasher: Hasher,
 }
 
 impl<'a> ImageSplitter<'a> {
@@ -78,6 +80,7 @@ impl<'a> ImageSplitter<'a> {
             page_size: get_page_size(),
             meta_pages: 0,
             pages_done: 0,
+            hasher: Hasher::new(MessageDigest::sha256()).unwrap(),
         }
     }
 
@@ -113,6 +116,7 @@ impl<'a> ImageSplitter<'a> {
             meta_size = length;
         }
 
+        self.hasher.update(&buf[..meta_size]).unwrap();
         let bytes_written = self.header_file.write(&buf[..meta_size])?;
 
         // Assert that the write did not cross into data territory, only sidled
@@ -121,6 +125,14 @@ impl<'a> ImageSplitter<'a> {
         assert!((bytes_written & (page_size - 1)) == 0);
 
         self.pages_done += bytes_written / page_size;
+        // If the header just finished, finalize the hash of it and save it into
+        // the metadata.
+        if self.pages_done == self.meta_pages {
+            self.metadata
+                .header_hash
+                .copy_from_slice(&self.hasher.finish().unwrap());
+        }
+
         if bytes_written == length {
             return Ok(bytes_written);
         }
@@ -157,6 +169,8 @@ pub struct ImageJoiner<'a> {
     page_size: usize,
     meta_pages: usize,
     pages_done: usize,
+    hasher: Hasher,
+    header_hash: Vec<u8>,
 }
 
 impl<'a> ImageJoiner<'a> {
@@ -167,7 +181,18 @@ impl<'a> ImageJoiner<'a> {
             page_size: get_page_size(),
             meta_pages: 0,
             pages_done: 0,
+            hasher: Hasher::new(MessageDigest::sha256()).unwrap(),
+            header_hash: vec![],
         }
+    }
+
+    pub fn get_header_hash(&self, hash: &mut [u8; HIBERNATE_HASH_SIZE]) -> usize {
+        if self.header_hash.len() != HIBERNATE_HASH_SIZE {
+            return 0;
+        }
+
+        hash.copy_from_slice(&self.header_hash[..]);
+        return self.meta_pages;
     }
 
     // Helper function to read contents from the header file, snarfing out the
@@ -187,10 +212,11 @@ impl<'a> ImageJoiner<'a> {
         if self.pages_done == 0 {
             assert!(self.meta_pages == 0);
 
-            let bytes_read = self.header_file.read(&mut buf[0..page_size])?;
+            let bytes_read = self.header_file.read(&mut buf[..page_size])?;
 
             assert!(bytes_read == page_size);
 
+            self.hasher.update(&buf[..bytes_read]).unwrap();
             offset += bytes_read;
             self.pages_done += bytes_read / page_size;
             self.meta_pages = read_header_page(buf, page_size)?;
@@ -207,7 +233,19 @@ impl<'a> ImageJoiner<'a> {
 
         assert!((bytes_read & (page_size - 1)) == 0);
 
+        let read_end = offset + bytes_read;
+        self.hasher.update(&buf[offset..read_end]).unwrap();
         self.pages_done += bytes_read / page_size;
+
+        assert!(self.pages_done <= self.meta_pages);
+
+        // Save the hash locally if this was the last header page. The caller
+        // will eventually ask for it once the private metadata is unlocked.
+        if self.pages_done == self.meta_pages {
+            let hash_slice: &[u8] = &self.hasher.finish().unwrap();
+            self.header_hash = hash_slice.to_vec();
+        }
+
         offset += bytes_read;
         if offset == length {
             return Ok(offset);
