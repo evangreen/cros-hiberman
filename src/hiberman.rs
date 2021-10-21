@@ -20,12 +20,13 @@ mod splitter;
 
 use crate::dbus::HiberDbusConnection;
 use cookie::set_hibernate_cookie;
-use crypto::CryptoWriter;
+use crypto::{CryptoReader, CryptoWriter};
 use diskfile::{BouncedDiskFile, DiskFile};
 use hiberlog::{clear_log_file, flush_log, redirect_log, replay_log_file, reset_log, HiberlogOut};
 use hibermeta::{
     HibernateMetadata, HIBERNATE_HASH_SIZE, HIBERNATE_META_FLAG_ENCRYPTED,
-    HIBERNATE_META_FLAG_RESUME_STARTED, HIBERNATE_META_FLAG_RESUME_LAUNCHED, HIBERNATE_META_FLAG_RESUME_FAILED, HIBERNATE_META_FLAG_VALID,
+    HIBERNATE_META_FLAG_RESUME_FAILED, HIBERNATE_META_FLAG_RESUME_LAUNCHED,
+    HIBERNATE_META_FLAG_RESUME_STARTED, HIBERNATE_META_FLAG_VALID,
 };
 use hiberutil::{
     get_page_size, get_total_memory_pages, path_to_stateful_block, HibernateError, Result,
@@ -533,7 +534,7 @@ fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()
     let hiber_file = context.hiber_file.as_mut().unwrap();
     let mut header_file = context.header_file.take().unwrap();
     let mut joiner = ImageJoiner::new(&mut header_file, hiber_file);
-    let mover_source: &mut dyn Read;
+    let mut mover_source: &mut dyn Read;
 
     // Fire up the preloader to start loading pages off of disk right away.
     let mut preloader;
@@ -581,18 +582,18 @@ fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()
     info!("Loading private metadata");
     key_manager.install_saved_metadata_key(metadata)?;
     metadata.load_private_data()?;
-    let mut mover_dest: &mut dyn Write = snap_dev;
     let mut decryptor;
     if (metadata.flags & HIBERNATE_META_FLAG_ENCRYPTED) != 0 {
-        decryptor = CryptoWriter::new(
-            snap_dev,
+        decryptor = CryptoReader::new(
+            mover_source,
             metadata.data_key,
             metadata.data_iv,
             false,
-            page_size,
+            page_size * BUFFER_PAGES,
         )?;
-        mover_dest = &mut decryptor;
-        debug!("Image is encrypted")
+
+        mover_source = &mut decryptor;
+        debug!("Image is encrypted");
     } else {
         if options.unencrypted {
             warn!("Image is not encrypted");
@@ -605,7 +606,7 @@ fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()
     // Move from the image, which can read big chunks, to the snapshot dev, which only writes pages.
     let mut reader = ImageMover::new(
         mover_source,
-        mover_dest,
+        snap_dev,
         image_size as i64,
         page_size * BUFFER_PAGES,
         page_size,
@@ -717,7 +718,7 @@ fn suspend_system(context: &mut HibernateContext, options: &HibernateOptions) ->
 fn replay_log(suspend_log: bool, clear: bool) {
     let name = match suspend_log {
         true => "suspend log",
-        false => "resume log"
+        false => "resume log",
     };
 
     let mut log_file = match open_log_file(suspend_log) {
