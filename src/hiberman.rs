@@ -22,7 +22,7 @@ use crate::dbus::HiberDbusConnection;
 use cookie::set_hibernate_cookie;
 use crypto::CryptoWriter;
 use diskfile::{BouncedDiskFile, DiskFile};
-use hiberlog::{flush_log, redirect_log, replay_log_file, reset_log, HiberlogOut};
+use hiberlog::{clear_log_file, flush_log, redirect_log, replay_log_file, reset_log, HiberlogOut};
 use hibermeta::{
     HibernateMetadata, HIBERNATE_HASH_SIZE, HIBERNATE_META_FLAG_ENCRYPTED,
     HIBERNATE_META_FLAG_RESUME_STARTED, HIBERNATE_META_FLAG_RESUME_LAUNCHED, HIBERNATE_META_FLAG_RESUME_FAILED, HIBERNATE_META_FLAG_VALID,
@@ -714,23 +714,39 @@ fn suspend_system(context: &mut HibernateContext, options: &HibernateOptions) ->
     result
 }
 
-fn replay_logs(push_resume_logs: bool) {
-    // Push the hibernate logs that were taking after the snapshot (and
+fn replay_log(suspend_log: bool, clear: bool) {
+    let name = match suspend_log {
+        true => "suspend log",
+        false => "resume log"
+    };
+
+    let mut log_file = match open_log_file(suspend_log) {
+        Ok(f) => f,
+        Err(e) => {
+            warn!("Failed to open {}: {}", name, e);
+            return;
+        }
+    };
+
+    replay_log_file(&mut log_file, name);
+    if clear {
+        if let Err(e) = clear_log_file(&mut log_file) {
+            warn!("Failed to clear {}: {}", name, e);
+        }
+    }
+}
+
+fn replay_logs(push_resume_logs: bool, clear: bool) {
+    // Push the hibernate logs that were taken after the snapshot (and
     // therefore after syslog became frozen) back into the syslog now.
     // These should be there on both success and failure cases.
-    match open_log_file(true) {
-        Ok(mut f) => replay_log_file(&mut f, "suspend log"),
-        Err(e) => warn!("Failed to open suspend log: {}", e),
-    }
+    replay_log(true, clear);
 
     // If successfully resumed from hibernate, or in the bootstrapping kernel
     // after a failed resume attempt, also gather the resume logs
     // saved by the bootstrapping kernel.
     if push_resume_logs {
-        match open_log_file(false) {
-            Ok(mut f) => replay_log_file(&mut f, "resume log"),
-            Err(e) => warn!("Failed to open resume log: {}", e),
-        }
+        replay_log(false, clear);
     }
 }
 
@@ -871,7 +887,7 @@ pub fn hibernate(options: &HibernateOptions) -> Result<()> {
     // Now send any remaining logs and future logs to syslog.
     redirect_log(HiberlogOut::Syslog, None);
     // Replay logs first because they happened earlier.
-    replay_logs(result.is_ok() && !options.dry_run);
+    replay_logs(result.is_ok() && !options.dry_run, !options.dry_run);
     delete_data_if_disk_full(fs_stats)?;
     result
 }
@@ -938,8 +954,9 @@ pub fn resume(options: &ResumeOptions) -> Result<()> {
     // Start keeping logs in memory, anticipating success.
     redirect_log(HiberlogOut::BufferInMemory, None);
     let mut result = resume_inner(options, &mut dbus_connection);
-    // Replay earlier logs first.
-    replay_logs(true);
+    // Replay earlier logs first. Don't wipe the logs out if this is just a dry
+    // run.
+    replay_logs(true, !options.dry_run);
     // Then move pending and future logs to syslog.
     redirect_log(HiberlogOut::Syslog, None);
     // Unless the test keys are being used, wait for the key material from

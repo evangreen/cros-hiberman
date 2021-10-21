@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 //! Implement consistent logging across the hibernate and resume transition.
+use crate::diskfile::BouncedDiskFile;
 use crate::hiberutil::{HibernateError, Result};
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -14,11 +15,11 @@ use sync::Mutex;
 pub use sys_util::syslog::{Facility, Priority};
 
 // Define the mount location where the hibernate data is located.
-pub static KMSG_PATH: &str = "/dev/kmsg";
+pub const KMSG_PATH: &str = "/dev/kmsg";
 // Define the prefix to go on log messages.
-pub static LOG_PREFIX: &str = "hiberman";
+pub const LOG_PREFIX: &str = "hiberman";
 // Define the default flush threshold. This must be a power of two.
-pub static FLUSH_THRESHOLD: usize = 4096;
+pub const FLUSH_THRESHOLD: usize = 4096;
 
 // Copied from sys_util/src/syslog.rs.
 // TODO: Figure out how to modify sys_util so that we can just implement a backend here.
@@ -266,7 +267,7 @@ impl Hiberlog {
     }
 
     pub fn flush(&mut self) {
-        // Do a regular full-page flush, which be perfectly page aligned.
+        // Do a regular full-page flush, which will be perfectly page aligned.
         self.flush_full_pages();
         // Flush one more page, which serves two purposes:
         // 1. Flushes out a partial page.
@@ -338,6 +339,20 @@ pub fn reset_log() {
 pub fn flush_log() {
     let mut state = lock!();
     state.flush();
+}
+
+pub fn clear_log_file(file: &mut BouncedDiskFile) -> Result<()> {
+    let mut buf = [0u8; FLUSH_THRESHOLD];
+    buf[0] = '\n' as u8;
+    file.rewind()?;
+    if let Err(e) = file.write(&buf) {
+        return Err(HibernateError::FileIoError(
+            "Failed to write".to_string(),
+            e,
+        ));
+    }
+
+    Ok(())
 }
 
 // Replay a log file to syslog.

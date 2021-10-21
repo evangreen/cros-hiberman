@@ -361,17 +361,17 @@ impl HibernateMetadata {
     fn build_public_data(&self, include_private: bool) -> Result<PublicHibernateMetadata> {
         let private = match include_private {
             true => self.build_private_buffer()?,
-            false => [0u8; HIBERNATE_META_PRIVATE_SIZE]
+            false => [0u8; HIBERNATE_META_PRIVATE_SIZE],
         };
 
         let private_iv = match include_private {
             true => self.meta_iv,
-            false => [0u8; HIBERNATE_DATA_IV_SIZE]
+            false => [0u8; HIBERNATE_DATA_IV_SIZE],
         };
 
         let meta_eph_public = match include_private {
             true => self.meta_eph_public,
-            false => [0u8; HIBERNATE_META_KEY_SIZE]
+            false => [0u8; HIBERNATE_META_KEY_SIZE],
         };
 
         Ok(PublicHibernateMetadata {

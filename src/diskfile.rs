@@ -174,7 +174,7 @@ impl DiskFile {
     pub fn rewind(&mut self) -> Result<()> {
         match self.seek(SeekFrom::Start(0)) {
             Ok(_) => Ok(()),
-            Err(e) => Err(HibernateError::FileIoError("Failed to seek".to_string(), e))
+            Err(e) => Err(HibernateError::FileIoError("Failed to seek".to_string(), e)),
         }
     }
 
