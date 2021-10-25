@@ -34,6 +34,9 @@ pub enum HibernateError {
     /// Error getting the fiemap
     #[error("Error getting the fiemap: {0}")]
     FiemapError(sys_util::Error),
+    /// First data byte mismatch
+    #[error("First data byte mismatch")]
+    FirstDataByteMismatch(),
     /// Header content hash mismatch
     #[error("Header content hash mismatch")]
     HeaderContentHashMismatch(),

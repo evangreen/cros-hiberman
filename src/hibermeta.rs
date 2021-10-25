@@ -71,6 +71,9 @@ pub struct HibernateMetadata {
     pub data_key: [u8; HIBERNATE_DATA_KEY_SIZE],
     // Hibernate symmetric encryption IV (chosen randomly).
     pub data_iv: [u8; HIBERNATE_DATA_IV_SIZE],
+    // The first byte of data, in plaintext. This is needed to coerce the kernel
+    // into doing its image allocation. Random IV used for metadata encryption.
+    pub first_data_byte: u8,
     // Public side of the ephemeral keypair used in Diffie-Hellman to derive
     // the metadata key.
     pub meta_eph_public: [u8; HIBERNATE_META_KEY_SIZE],
@@ -101,6 +104,9 @@ pub struct PublicHibernateMetadata {
     image_size: u64,
     // Flags. See HIBERNATE_META_FLAG_* definitions.
     flags: u32,
+    // The first byte of data, needed to coerce the kernel into doing its big
+    // allocation.
+    first_data_byte: u8,
     // Public side of the ephemeral keypair used in Diffie-Hellman to
     // derive the metadata key.
     meta_eph_public: [u8; HIBERNATE_META_KEY_SIZE],
@@ -156,6 +162,7 @@ impl HibernateMetadata {
             header_hash: [0u8; HIBERNATE_HASH_SIZE],
             data_key,
             data_iv,
+            first_data_byte: 0,
             meta_iv,
             meta_eph_public,
             private_blob: None,
@@ -193,6 +200,7 @@ impl HibernateMetadata {
             header_hash: [0u8; HIBERNATE_HASH_SIZE],
             data_key: [0u8; HIBERNATE_DATA_KEY_SIZE],
             data_iv: [0u8; HIBERNATE_DATA_IV_SIZE],
+            first_data_byte: pubdata.first_data_byte,
             meta_iv: pubdata.private_iv,
             meta_key: None,
             meta_eph_public: pubdata.meta_eph_public,
@@ -380,6 +388,7 @@ impl HibernateMetadata {
             pagemap_pages: self.pagemap_pages,
             image_size: self.image_size,
             flags: self.flags,
+            first_data_byte: self.first_data_byte,
             meta_eph_public,
             private_iv,
             private,

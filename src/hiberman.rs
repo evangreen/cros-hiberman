@@ -526,6 +526,58 @@ fn populate_seed(
     key_manager.set_private_key(&seed)
 }
 
+// To get the kernel to do its big allocation, we sent one byte of data to it
+// after sending the header pages. But now we're out of alignment for the main
+// move. This function sends the rest of the page to get things realigned, and
+// verifies the contents of the first byte.
+fn read_first_partial_page(
+    metadata: &HibernateMetadata,
+    source: &mut dyn Read,
+    dest: &mut dyn Write,
+    page_size: usize,
+) -> Result<()> {
+    let mut buf = vec![0u8; page_size];
+    // Get the whole page from the source, including the first byte.
+    let bytes_read = match source.read(&mut buf[..]) {
+        Ok(s) => s,
+        Err(e) => return Err(HibernateError::FileIoError("Failed to read".to_string(), e)),
+    };
+
+    if bytes_read != page_size {
+        return Err(HibernateError::IoSizeError(format!(
+            "Read only {} of {} byte",
+            bytes_read, page_size
+        )));
+    }
+
+    if buf[0] != metadata.first_data_byte {
+        // Print an error, but don't print the right answer.
+        error!("First data byte of {:x} was incorrect", buf[0]);
+        return Err(HibernateError::FirstDataByteMismatch());
+    }
+
+    // Now write most of the page.
+    let bytes_written = match dest.write(&buf[1..]) {
+        Ok(s) => s,
+        Err(e) => {
+            return Err(HibernateError::FileIoError(
+                "Failed to write".to_string(),
+                e,
+            ))
+        }
+    };
+
+    if bytes_written != page_size - 1 {
+        return Err(HibernateError::IoSizeError(format!(
+            "Wrote only {} of {} byte",
+            bytes_written,
+            page_size - 1
+        )));
+    }
+
+    Ok(())
+}
+
 fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()> {
     let page_size = get_page_size();
     let snap_dev = context.snap_dev.as_mut().unwrap();
@@ -563,6 +615,27 @@ fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()
         drop(mover);
         debug!("Done loading header");
         image_size -= header_size as u64;
+        // Also write the first data byte, which is what triggers the kernel to
+        // do its big allocation.
+        match snap_dev.write(std::slice::from_ref(&context.metadata.first_data_byte)) {
+            Ok(s) => {
+                if s != 1 {
+                    return Err(HibernateError::IoSizeError(format!(
+                        "Wrote only {} of 1 byte",
+                        s
+                    )));
+                }
+            }
+            Err(e) => {
+                return Err(HibernateError::FileIoError(
+                    "Failed to write one byte to snap dev".to_string(),
+                    e,
+                ))
+            }
+        }
+
+        // Now that the kernel got its chunk, fill up the rest of memory with
+        // data from disk.
         debug!("Preloading hibernate image");
         preloader.load_into_available_memory()?;
         mover_source = &mut preloader;
@@ -603,7 +676,14 @@ fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()
         }
     }
 
+    // If the preloader was used, then the first data byte was already sent down. Send down a partial page
     // Move from the image, which can read big chunks, to the snapshot dev, which only writes pages.
+    if !options.no_preloader {
+        debug!("Sending in partial page");
+        read_first_partial_page(&metadata, mover_source, snap_dev, page_size)?;
+        image_size -= page_size as u64;
+    }
+
     let mut reader = ImageMover::new(
         mover_source,
         snap_dev,

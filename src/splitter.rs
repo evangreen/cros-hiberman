@@ -106,49 +106,65 @@ impl<'a> ImageSplitter<'a> {
                 self.meta_pages.try_into().expect("Too many metadata pages");
         }
 
-        // Send the write down to the header file (which better be the right
-        // place for it). Send either the rest of the metadata or the rest of
-        // this buffer.
-        assert!(self.pages_done < self.meta_pages);
+        // Write out to the header if that's not done yet.
+        let mut offset = 0;
+        if self.pages_done < self.meta_pages {
+            // Send either the rest of the metadata or the rest of this buffer.
+            assert!(self.pages_done < self.meta_pages);
 
-        let mut meta_size = (self.meta_pages - self.pages_done) * self.page_size;
-        if meta_size > length {
-            meta_size = length;
+            let mut meta_size = (self.meta_pages - self.pages_done) * self.page_size;
+            if meta_size > length {
+                meta_size = length;
+            }
+
+            self.hasher.update(&buf[..meta_size]).unwrap();
+            let bytes_written = self.header_file.write(&buf[..meta_size])?;
+
+            // Assert that the write did not cross into data territory, only sidled
+            // up to it.
+            assert!((self.pages_done + (bytes_written / page_size)) <= self.meta_pages);
+            assert!((bytes_written & (page_size - 1)) == 0);
+
+            self.pages_done += bytes_written / page_size;
+            // If the header just finished, finalize the hash of it and save it into
+            // the metadata.
+            if self.pages_done == self.meta_pages {
+                self.metadata
+                    .header_hash
+                    .copy_from_slice(&self.hasher.finish().unwrap());
+            }
+
+            if bytes_written == length {
+                return Ok(bytes_written);
+            }
+
+            offset = bytes_written;
         }
 
-        self.hasher.update(&buf[..meta_size]).unwrap();
-        let bytes_written = self.header_file.write(&buf[..meta_size])?;
-
-        // Assert that the write did not cross into data territory, only sidled
-        // up to it.
-        assert!((self.pages_done + (bytes_written / page_size)) <= self.meta_pages);
-        assert!((bytes_written & (page_size - 1)) == 0);
-
-        self.pages_done += bytes_written / page_size;
-        // If the header just finished, finalize the hash of it and save it into
-        // the metadata.
+        // Write down to the data file. If this is the first byte of data, save
+        // it off to the metadata too.
         if self.pages_done == self.meta_pages {
-            self.metadata
-                .header_hash
-                .copy_from_slice(&self.hasher.finish().unwrap());
-        }
-
-        if bytes_written == length {
-            return Ok(bytes_written);
+            self.metadata.first_data_byte = buf[offset];
         }
 
         // Send the rest of the write down to the data file.
-        let offset = bytes_written;
         let bytes_written = self.data_file.write(&buf[offset..])?;
-        Ok(offset + bytes_written)
+
+        assert!((bytes_written & (page_size - 1)) == 0);
+
+        self.pages_done += bytes_written / page_size;
+        offset += bytes_written;
+        Ok(offset)
     }
 }
 
 impl Write for ImageSplitter<'_> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        // Just forward the write on down if the header's already been split off.
-        // This will be the hot path.
-        if (self.meta_pages != 0) && (self.pages_done >= self.meta_pages) {
+        // Just forward the write on down if the header's already been split
+        // off. This will be the hot path. The comparison is strictly greater
+        // than because we also need to slurp the first data byte from the first
+        // data page.
+        if (self.meta_pages != 0) && (self.pages_done > self.meta_pages) {
             return self.data_file.write(buf);
         }
 
