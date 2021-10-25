@@ -211,7 +211,7 @@ impl Read for CryptoReader<'_> {
             self.extra_offset = 0;
             self.extra_size = self
                 .crypter
-                .update(&source_buf[direct_count..], extra)
+                .update(&source_buf[direct_count..source_bytes], extra)
                 .unwrap();
         }
 
