@@ -16,6 +16,7 @@ mod imagemover;
 mod keyman;
 mod mmapbuf;
 mod preloader;
+mod snapdev;
 mod splitter;
 
 use crate::dbus::HiberDbusConnection;
@@ -34,14 +35,14 @@ use hiberutil::{
 pub use hiberutil::{HibernateOptions, ResumeOptions};
 use imagemover::ImageMover;
 use keyman::HibernateKeyManager;
-use libc::{self, c_int, c_ulong, c_void, loff_t};
+use libc;
 use preloader::ImagePreloader;
+use snapdev::SnapshotDevice;
 use splitter::{ImageJoiner, ImageSplitter, HIBER_HEADER_MAX_SIZE};
 use std::ffi::CString;
-use std::fs::{create_dir, metadata, File, OpenOptions};
+use std::fs::{create_dir, File, OpenOptions};
 use std::io::{BufRead, BufReader, IoSliceMut, Read, Seek, SeekFrom, Write};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::FileTypeExt;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 
@@ -52,7 +53,6 @@ static HIBER_HEADER_NAME: &str = "header";
 static HIBER_DATA_NAME: &str = "hiberfile";
 static RESUME_LOG_FILE_NAME: &str = "resume_log";
 static SUSPEND_LOG_FILE_NAME: &str = "suspend_log";
-static SNAPSHOT_PATH: &str = "/dev/snapshot";
 static SWAPPINESS_PATH: &str = "/proc/sys/vm/swappiness";
 static SUSPEND_SWAPPINESS: i32 = 100;
 // How many pages comprise a single buffer.
@@ -63,20 +63,11 @@ static LOW_DISK_FREE_THRESHOLD: u64 = 10;
 // The size of the preallocated log files.
 static HIBER_LOG_SIZE: i64 = 1024 * 1024 * 4;
 
-// Define snapshot device ioctl numbers.
-static SNAPSHOT_FREEZE: c_ulong = 0x3301;
-static SNAPSHOT_UNFREEZE: c_ulong = 0x3302;
-static SNAPSHOT_ATOMIC_RESTORE: c_ulong = 0x3304;
-static SNAPSHOT_GET_IMAGE_SIZE: c_ulong = 0x8008330e;
-static SNAPSHOT_PLATFORM_SUPPORT: c_ulong = 0x330f;
-static SNAPSHOT_POWER_OFF: c_ulong = 0x3310;
-static SNAPSHOT_CREATE_IMAGE: c_ulong = 0x40043311;
-
 struct HibernateContext {
     header_file: Option<DiskFile>,
     hiber_file: Option<DiskFile>,
     meta_file: Option<BouncedDiskFile>,
-    snap_dev: Option<File>,
+    snap_dev: Option<SnapshotDevice>,
     metadata: HibernateMetadata,
 }
 
@@ -84,7 +75,7 @@ struct ResumeContext<'a> {
     header_file: Option<DiskFile>,
     hiber_file: Option<DiskFile>,
     meta_file: Option<BouncedDiskFile>,
-    snap_dev: Option<File>,
+    snap_dev: Option<SnapshotDevice>,
     metadata: HibernateMetadata,
     dbus_connection: &'a mut HiberDbusConnection,
     key_manager: HibernateKeyManager,
@@ -322,147 +313,9 @@ impl Drop for SwappinessData {
     }
 }
 
-fn open_snapshot(for_write: bool) -> Result<File> {
-    if !Path::new(SNAPSHOT_PATH).exists() {
-        return Err(HibernateError::SnapshotError(format!(
-            "Snapshot device {} does not exist",
-            SNAPSHOT_PATH
-        )));
-    }
-
-    let snapshot_meta = match metadata(SNAPSHOT_PATH) {
-        Ok(f) => f,
-        Err(e) => return Err(HibernateError::OpenFileError(SNAPSHOT_PATH.to_string(), e)),
-    };
-
-    if !snapshot_meta.file_type().is_char_device() {
-        return Err(HibernateError::SnapshotError(format!(
-            "Snapshot device {} is not a character device",
-            SNAPSHOT_PATH
-        )));
-    }
-
-    match OpenOptions::new()
-        .read(!for_write)
-        .write(for_write)
-        .open(SNAPSHOT_PATH)
-    {
-        Ok(f) => Ok(f),
-        Err(e) => return Err(HibernateError::OpenFileError(SNAPSHOT_PATH.to_string(), e)),
-    }
-}
-
-// Freeze or unfreeze userspace.
-fn freeze_userspace(snap_dev: &mut File, freeze: bool) -> Result<()> {
-    let (name, value) = match freeze {
-        true => ("FREEZE", SNAPSHOT_FREEZE),
-        false => ("UNFREEZE", SNAPSHOT_UNFREEZE),
-    };
-    let rc = unsafe { libc::ioctl(snap_dev.as_raw_fd(), value, 0) };
-
-    if rc < 0 {
-        return Err(HibernateError::SnapshotIoctlError(
-            name.to_string(),
-            sys_util::Error::last(),
-        ));
-    }
-
-    Ok(())
-}
-
-// Asks the kernel to create its hibernate snapshot. Returns a boolean indicating whether this
-// process is exeuting in suspend (true) or not (false). Like setjmp(), this function effectively
-// returns twice: once after the snapshot image is created (true), and this is also where we
-// restart execution from when the hibernated image is restored (false).
-fn atomic_snapshot(snap_dev: &mut File) -> Result<bool> {
-    let mut in_suspend: c_int = 0;
-    let rc = unsafe {
-        libc::ioctl(
-            snap_dev.as_raw_fd(),
-            SNAPSHOT_CREATE_IMAGE,
-            &mut in_suspend as *mut c_int as *mut c_void,
-        )
-    };
-
-    if rc < 0 {
-        return Err(HibernateError::SnapshotIoctlError(
-            "CREATE_IMAGE".to_string(),
-            sys_util::Error::last(),
-        ));
-    }
-
-    Ok(in_suspend != 0)
-}
-
-fn atomic_restore(snap_dev: &mut File) -> Result<()> {
-    let rc = unsafe { libc::ioctl(snap_dev.as_raw_fd(), SNAPSHOT_ATOMIC_RESTORE, 0) };
-
-    if rc < 0 {
-        return Err(HibernateError::SnapshotIoctlError(
-            "RESTORE".to_string(),
-            sys_util::Error::last(),
-        ));
-    }
-
-    Ok(())
-}
-
-fn get_image_size(snap_dev: &mut File) -> Result<loff_t> {
-    let mut image_size: loff_t = 0;
-    let rc = unsafe {
-        libc::ioctl(
-            snap_dev.as_raw_fd(),
-            SNAPSHOT_GET_IMAGE_SIZE,
-            &mut image_size as *mut loff_t as *mut c_void,
-        )
-    };
-
-    if rc < 0 {
-        return Err(HibernateError::SnapshotIoctlError(
-            "GET_IMAGE_SIZE".to_string(),
-            sys_util::Error::last(),
-        ));
-    }
-
-    Ok(image_size)
-}
-
-fn set_platform_mode(snap_dev: &mut File, use_platform_mode: bool) -> Result<()> {
-    let move_param: c_int = use_platform_mode as c_int;
-    let rc = unsafe {
-        libc::ioctl(
-            snap_dev.as_raw_fd(),
-            SNAPSHOT_PLATFORM_SUPPORT,
-            &move_param as *const c_int as *const c_void,
-        )
-    };
-
-    if rc < 0 {
-        return Err(HibernateError::SnapshotIoctlError(
-            "PLATFORM_SUPPORT".to_string(),
-            sys_util::Error::last(),
-        ));
-    }
-
-    Ok(())
-}
-
-fn snapshot_power_off(snap_dev: &mut File) -> Result<()> {
-    let rc = unsafe { libc::ioctl(snap_dev.as_raw_fd(), SNAPSHOT_POWER_OFF, 0) };
-
-    if rc < 0 {
-        return Err(HibernateError::SnapshotIoctlError(
-            "POWER_OFF".to_string(),
-            sys_util::Error::last(),
-        ));
-    }
-
-    Ok(())
-}
-
 fn write_image(context: &mut HibernateContext, options: &HibernateOptions) -> Result<()> {
     let snap_dev = context.snap_dev.as_mut().unwrap();
-    let image_size = get_image_size(snap_dev)?;
+    let image_size = snap_dev.get_image_size()?;
     let page_size = get_page_size();
     let mut mover_dest: &mut dyn Write = context.hiber_file.as_mut().unwrap();
     let mut encryptor;
@@ -485,7 +338,7 @@ fn write_image(context: &mut HibernateContext, options: &HibernateOptions) -> Re
     let mut header_file = context.header_file.take().unwrap();
     let mut splitter = ImageSplitter::new(&mut header_file, mover_dest, &mut context.metadata);
     let mut writer = ImageMover::new(
-        snap_dev,
+        &mut snap_dev.file,
         &mut splitter,
         image_size,
         page_size,
@@ -606,7 +459,7 @@ fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()
         );
         let mut mover = ImageMover::new(
             &mut preloader,
-            snap_dev,
+            &mut snap_dev.file,
             header_size as i64,
             page_size * BUFFER_PAGES,
             page_size,
@@ -617,7 +470,10 @@ fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()
         image_size -= header_size as u64;
         // Also write the first data byte, which is what triggers the kernel to
         // do its big allocation.
-        match snap_dev.write(std::slice::from_ref(&context.metadata.first_data_byte)) {
+        match snap_dev
+            .file
+            .write(std::slice::from_ref(&context.metadata.first_data_byte))
+        {
             Ok(s) => {
                 if s != 1 {
                     return Err(HibernateError::IoSizeError(format!(
@@ -680,13 +536,13 @@ fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()
     // Move from the image, which can read big chunks, to the snapshot dev, which only writes pages.
     if !options.no_preloader {
         debug!("Sending in partial page");
-        read_first_partial_page(&metadata, mover_source, snap_dev, page_size)?;
+        read_first_partial_page(&metadata, mover_source, &mut snap_dev.file, page_size)?;
         image_size -= page_size as u64;
     }
 
     let mut reader = ImageMover::new(
         mover_source,
-        snap_dev,
+        &mut snap_dev.file,
         image_size as i64,
         page_size * BUFFER_PAGES,
         page_size,
@@ -722,10 +578,10 @@ fn read_image(context: &mut ResumeContext, options: &ResumeOptions) -> Result<()
 fn snapshot_and_save(context: &mut HibernateContext, options: &HibernateOptions) -> Result<()> {
     let block_path = path_to_stateful_block()?;
     let snap_dev = context.snap_dev.as_mut().unwrap();
-    set_platform_mode(snap_dev, false)?;
+    snap_dev.set_platform_mode(false)?;
     // This is where the suspend path and resume path fork. On success,
     // both halves of these conditions execute, just at different times.
-    if atomic_snapshot(snap_dev)? {
+    if snap_dev.atomic_snapshot()? {
         // Suspend path. Everything after this point is invisible to the
         // hibernated kernel.
         write_image(context, options)?;
@@ -752,7 +608,7 @@ fn snapshot_and_save(context: &mut HibernateContext, options: &HibernateOptions)
         // Power the thing down.
         if !options.dry_run {
             let snap_dev = context.snap_dev.as_mut().unwrap();
-            snapshot_power_off(snap_dev)?;
+            snap_dev.power_off()?;
             error!("Returned from power off");
         }
 
@@ -772,15 +628,15 @@ fn snapshot_and_save(context: &mut HibernateContext, options: &HibernateOptions)
 }
 
 fn suspend_system(context: &mut HibernateContext, options: &HibernateOptions) -> Result<()> {
-    context.snap_dev = Some(open_snapshot(false)?);
+    context.snap_dev = Some(SnapshotDevice::new(false)?);
     info!("Freezing userspace");
     let snap_dev = context.snap_dev.as_mut().unwrap();
-    freeze_userspace(snap_dev, true)?;
+    snap_dev.freeze_userspace()?;
     let mut result = snapshot_and_save(context, options);
     // Take the snapshot device, and then drop it so that other processes
     // really unfreeze.
     let mut snap_dev = context.snap_dev.take().unwrap();
-    let freeze_result = freeze_userspace(&mut snap_dev, false);
+    let freeze_result = snap_dev.unfreeze_userspace();
     // Fail an otherwise happy suspend for failing to unfreeze, but don't
     // clobber an earlier error, as this is likely a downstream symptom.
     if freeze_result.is_err() {
@@ -867,7 +723,8 @@ fn launch_resume_image(context: &mut ResumeContext) -> Result<()> {
     flush_log();
     // Keep logs in memory for now.
     redirect_log(HiberlogOut::BufferInMemory, None);
-    let result = atomic_restore(context.snap_dev.as_mut().unwrap());
+    let snap_dev = context.snap_dev.as_mut().unwrap();
+    let result = snap_dev.atomic_restore();
     error!("Resume failed");
     // If we are still executing then the resume failed. Mark it as such.
     metadata.flags |= HIBERNATE_META_FLAG_RESUME_FAILED;
@@ -882,13 +739,13 @@ fn resume_system(context: &mut ResumeContext, options: &ResumeOptions) -> Result
     log_file.set_logging(false);
     // Start logging to the resume logger.
     redirect_log(HiberlogOut::File, Some(Box::new(log_file)));
-    let mut snap_dev = open_snapshot(true)?;
-    set_platform_mode(&mut snap_dev, false)?;
+    let mut snap_dev = SnapshotDevice::new(true)?;
+    snap_dev.set_platform_mode(false)?;
     context.snap_dev = Some(snap_dev);
     read_image(context, options)?;
     info!("Freezing userspace");
     let snap_dev = context.snap_dev.as_mut().unwrap();
-    freeze_userspace(snap_dev, true)?;
+    snap_dev.freeze_userspace()?;
     // Drop the hiber file.
     context.hiber_file.take();
     let result;
@@ -906,7 +763,7 @@ fn resume_system(context: &mut ResumeContext, options: &ResumeOptions) -> Result
     info!("Unfreezing userspace");
     // Take the snap_dev, unfreeze userspace, and drop it.
     let mut snap_dev = context.snap_dev.take().unwrap();
-    if let Err(e) = freeze_userspace(&mut snap_dev, false) {
+    if let Err(e) = snap_dev.unfreeze_userspace() {
         error!("Failed to unfreeze userspace: {}", e);
     }
 
