@@ -125,7 +125,7 @@ fn hiberman_cat(args: &mut std::env::Args) -> std::result::Result<(), ()> {
             "--log" => log = true,
             "--help" => cat_usage(false),
             _ => {
-                if let Err(e) = hiberman::cat_disk_file(&arg, log) {
+                if let Err(e) = hiberman::cat::cat_disk_file(&arg, log) {
                     error!("Failed to cat {}: {}", &arg, e);
                     result = Err(())
                 }
@@ -184,7 +184,7 @@ fn hiberman_hibernate(args: &mut std::env::Args) -> std::result::Result<(), ()> 
         }
     }
 
-    if let Err(e) = hiberman::hibernate(&options) {
+    if let Err(e) = hiberman::hibernate(options) {
         error!("Failed to hibernate: {}", e);
         return Err(());
     }
@@ -242,7 +242,7 @@ fn hiberman_resume(args: &mut std::env::Args) -> std::result::Result<(), ()> {
         }
     }
 
-    if let Err(e) = hiberman::resume(&options) {
+    if let Err(e) = hiberman::resume(options) {
         error!("Failed to resume: {}", e);
         return Err(());
     }
