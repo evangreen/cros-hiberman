@@ -8,6 +8,9 @@ use crate::{error, warn};
 use std::process::Command;
 use thiserror::Error as ThisError;
 
+// How many pages comprise a single buffer.
+pub const BUFFER_PAGES: usize = 32;
+
 #[derive(Debug, ThisError)]
 pub enum HibernateError {
     /// Cookie error
@@ -169,4 +172,20 @@ pub fn path_to_stateful_block() -> Result<String> {
     };
 
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+pub fn lock_process_memory() -> Result<()> {
+    let rc = unsafe { libc::mlockall(libc::MCL_CURRENT | libc::MCL_FUTURE) };
+
+    if rc < 0 {
+        return Err(HibernateError::MlockallError(sys_util::Error::last()));
+    }
+
+    Ok(())
+}
+
+pub fn unlock_process_memory() {
+    unsafe {
+        libc::munlockall();
+    };
 }

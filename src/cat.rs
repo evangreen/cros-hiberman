@@ -4,8 +4,9 @@
 
 //! Implement the cat debug command
 
+use crate::files::open_bounced_disk_file;
 use crate::hiberutil::{HibernateError, Result};
-use crate::{open_bounced_disk_file, warn};
+use crate::warn;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 

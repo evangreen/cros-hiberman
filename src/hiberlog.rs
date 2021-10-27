@@ -4,6 +4,7 @@
 
 //! Implement consistent logging across the hibernate and resume transition.
 use crate::diskfile::BouncedDiskFile;
+use crate::files::open_log_file;
 use crate::hiberutil::{HibernateError, Result};
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -355,8 +356,44 @@ pub fn clear_log_file(file: &mut BouncedDiskFile) -> Result<()> {
     Ok(())
 }
 
+pub fn replay_logs(push_resume_logs: bool, clear: bool) {
+    // Push the hibernate logs that were taken after the snapshot (and
+    // therefore after syslog became frozen) back into the syslog now.
+    // These should be there on both success and failure cases.
+    replay_log(true, clear);
+
+    // If successfully resumed from hibernate, or in the bootstrapping kernel
+    // after a failed resume attempt, also gather the resume logs
+    // saved by the bootstrapping kernel.
+    if push_resume_logs {
+        replay_log(false, clear);
+    }
+}
+
+fn replay_log(suspend_log: bool, clear: bool) {
+    let name = match suspend_log {
+        true => "suspend log",
+        false => "resume log",
+    };
+
+    let mut log_file = match open_log_file(suspend_log) {
+        Ok(f) => f,
+        Err(e) => {
+            warn!("Failed to open {}: {}", name, e);
+            return;
+        }
+    };
+
+    replay_log_file(&mut log_file, name);
+    if clear {
+        if let Err(e) = clear_log_file(&mut log_file) {
+            warn!("Failed to clear {}: {}", name, e);
+        }
+    }
+}
+
 // Replay a log file to syslog.
-pub fn replay_log_file(file: &mut dyn Read, name: &str) {
+fn replay_log_file(file: &mut dyn Read, name: &str) {
     // Read the file until the first null byte is found, which
     // signifies the end of the log.
     let mut reader = BufReader::new(file);

@@ -1,0 +1,149 @@
+// Copyright 2021 The Chromium OS Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+//! High level support for creating and opening the files used by hibernate.
+
+use crate::diskfile::{BouncedDiskFile, DiskFile};
+use crate::hiberutil::{get_page_size, get_total_memory_pages, HibernateError, Result};
+use crate::splitter::HIBER_HEADER_MAX_SIZE;
+use crate::{debug, info};
+use libc;
+use std::fs::{File, OpenOptions};
+use std::os::unix::io::AsRawFd;
+use std::path::Path;
+
+static HIBERNATE_DIR: &str = "/mnt/stateful_partition/unencrypted/hibernate";
+static HIBER_META_NAME: &str = "metadata";
+static HIBER_META_SIZE: i64 = 1024 * 1024 * 8;
+static HIBER_HEADER_NAME: &str = "header";
+static HIBER_DATA_NAME: &str = "hiberfile";
+static RESUME_LOG_FILE_NAME: &str = "resume_log";
+static SUSPEND_LOG_FILE_NAME: &str = "suspend_log";
+// The size of the preallocated log files.
+static HIBER_LOG_SIZE: i64 = 1024 * 1024 * 4;
+
+pub fn preallocate_metadata_file() -> Result<BouncedDiskFile> {
+    let metadata_path = Path::new(HIBERNATE_DIR).join(HIBER_META_NAME);
+    let mut meta_file = preallocate_file(&metadata_path, HIBER_META_SIZE)?;
+    BouncedDiskFile::new(&mut meta_file, None)
+}
+
+// Preallocate the suspend or resume log file.
+pub fn preallocate_log_file(suspend: bool) -> Result<BouncedDiskFile> {
+    let name = match suspend {
+        true => SUSPEND_LOG_FILE_NAME,
+        false => RESUME_LOG_FILE_NAME,
+    };
+
+    let log_file_path = Path::new(HIBERNATE_DIR).join(name);
+    let mut log_file = preallocate_file(&log_file_path, HIBER_LOG_SIZE)?;
+    BouncedDiskFile::new(&mut log_file, None)
+}
+
+pub fn preallocate_header_file() -> Result<DiskFile> {
+    let path = Path::new(HIBERNATE_DIR).join(HIBER_HEADER_NAME);
+    let mut file = preallocate_file(&path, HIBER_HEADER_MAX_SIZE)?;
+    DiskFile::new(&mut file, None)
+}
+
+pub fn preallocate_hiberfile() -> Result<DiskFile> {
+    let hiberfile_path = Path::new(HIBERNATE_DIR).join(HIBER_DATA_NAME);
+
+    // The maximum size of the hiberfile is half of memory, plus a little
+    // fudge for rounding.
+    let memory_mb = get_total_memory_mb()?;
+    let hiberfile_mb = (memory_mb / 2) + 2;
+    debug!(
+        "System has {} MB of memory, preallocating {} MB hiberfile",
+        memory_mb, hiberfile_mb
+    );
+
+    let hiber_size = (hiberfile_mb as i64) * 1024 * 1024;
+    let mut hiber_file = preallocate_file(&hiberfile_path, hiber_size)?;
+    info!("Successfully preallocated {} MB hiberfile", hiberfile_mb);
+    DiskFile::new(&mut hiber_file, None)
+}
+
+// Open a pre-existing disk file with bounce buffer,
+// still with read and write permissions.
+pub fn open_bounced_disk_file(path: &Path) -> Result<BouncedDiskFile> {
+    let mut file = match OpenOptions::new().read(true).write(true).open(path) {
+        Ok(f) => f,
+        Err(e) => return Err(HibernateError::OpenFileError(path.display().to_string(), e)),
+    };
+
+    BouncedDiskFile::new(&mut file, None)
+}
+
+// Open a pre-existing header file, still with read and write permissions.
+pub fn open_header_file() -> Result<DiskFile> {
+    let path = Path::new(HIBERNATE_DIR).join(HIBER_HEADER_NAME);
+    open_disk_file(&path)
+}
+
+// Open a pre-existing hiberfile, still with read and write permissions.
+pub fn open_hiberfile() -> Result<DiskFile> {
+    let hiberfile_path = Path::new(HIBERNATE_DIR).join(HIBER_DATA_NAME);
+    open_disk_file(&hiberfile_path)
+}
+
+// Open a pre-existing hiberfile, still with read and write permissions.
+pub fn open_metafile() -> Result<BouncedDiskFile> {
+    let hiberfile_path = Path::new(HIBERNATE_DIR).join(HIBER_META_NAME);
+    open_bounced_disk_file(&hiberfile_path)
+}
+
+// Open one of the log files, either the suspend or resume log.
+pub fn open_log_file(suspend: bool) -> Result<BouncedDiskFile> {
+    let name = match suspend {
+        true => SUSPEND_LOG_FILE_NAME,
+        false => RESUME_LOG_FILE_NAME,
+    };
+
+    let path = Path::new(HIBERNATE_DIR).join(name);
+    open_bounced_disk_file(&path)
+}
+
+fn get_total_memory_mb() -> Result<u32> {
+    let pagesize = get_page_size() as i64;
+    let pagecount = get_total_memory_pages() as i64;
+
+    debug!("Pagesize {} pagecount {}", pagesize, pagecount);
+    let mb = pagecount * pagesize / (1024 * 1024);
+    if mb > 0xFFFFFFFF {
+        Ok(0xFFFFFFFFu32)
+    } else {
+        Ok(mb as u32)
+    }
+}
+
+fn preallocate_file(path: &Path, size: i64) -> Result<File> {
+    let file = match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(path)
+    {
+        Ok(f) => f,
+        Err(e) => return Err(HibernateError::OpenFileError(path.display().to_string(), e)),
+    };
+
+    let rc = unsafe { libc::fallocate(file.as_raw_fd(), 0, 0, size) as isize };
+
+    if rc < 0 {
+        return Err(HibernateError::FallocateError(sys_util::Error::last()));
+    }
+
+    Ok(file)
+}
+
+// Open a pre-existing disk file, still with read and write permissions.
+fn open_disk_file(path: &Path) -> Result<DiskFile> {
+    let mut file = match OpenOptions::new().read(true).write(true).open(path) {
+        Ok(f) => f,
+        Err(e) => return Err(HibernateError::OpenFileError(path.display().to_string(), e)),
+    };
+
+    DiskFile::new(&mut file, None)
+}

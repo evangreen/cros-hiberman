@@ -8,23 +8,24 @@ use crate::cookie::set_hibernate_cookie;
 use crate::crypto::CryptoReader;
 use crate::dbus::HiberDbusConnection;
 use crate::diskfile::{BouncedDiskFile, DiskFile};
-use crate::hiberlog::{flush_log, redirect_log, HiberlogOut};
+use crate::files::{open_header_file, open_hiberfile, open_log_file, open_metafile};
+use crate::hiberlog::{flush_log, redirect_log, replay_logs, HiberlogOut};
 use crate::hibermeta::{
     HibernateMetadata, HIBERNATE_HASH_SIZE, HIBERNATE_META_FLAG_ENCRYPTED,
     HIBERNATE_META_FLAG_RESUME_FAILED, HIBERNATE_META_FLAG_RESUME_LAUNCHED,
     HIBERNATE_META_FLAG_RESUME_STARTED, HIBERNATE_META_FLAG_VALID,
 };
 use crate::hiberutil::ResumeOptions;
-use crate::hiberutil::{get_page_size, path_to_stateful_block, HibernateError, Result};
+use crate::hiberutil::{
+    get_page_size, lock_process_memory, path_to_stateful_block, unlock_process_memory,
+    HibernateError, Result, BUFFER_PAGES,
+};
 use crate::imagemover::ImageMover;
 use crate::keyman::HibernateKeyManager;
 use crate::preloader::ImagePreloader;
 use crate::snapdev::SnapshotDevice;
 use crate::splitter::ImageJoiner;
-use crate::{
-    debug, error, info, lock_process_memory, open_header_file, open_hiberfile, open_log_file,
-    open_metafile, replay_logs, unlock_process_memory, warn, BUFFER_PAGES,
-};
+use crate::{debug, error, info, warn};
 use std::io::{Read, Write};
 
 pub struct ResumeConductor {

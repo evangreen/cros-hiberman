@@ -7,30 +7,33 @@
 use crate::cookie::set_hibernate_cookie;
 use crate::crypto::CryptoWriter;
 use crate::diskfile::{BouncedDiskFile, DiskFile};
-use crate::hiberlog::{flush_log, redirect_log, reset_log, HiberlogOut};
+use crate::files::{
+    preallocate_header_file, preallocate_hiberfile, preallocate_log_file, preallocate_metadata_file,
+};
+use crate::hiberlog::{flush_log, redirect_log, replay_logs, reset_log, HiberlogOut};
 use crate::hibermeta::{
     HibernateMetadata, HIBERNATE_META_FLAG_ENCRYPTED, HIBERNATE_META_FLAG_VALID,
 };
 use crate::hiberutil::HibernateOptions;
-use crate::hiberutil::{get_page_size, path_to_stateful_block, HibernateError, Result};
+use crate::hiberutil::{
+    get_page_size, lock_process_memory, path_to_stateful_block, unlock_process_memory,
+    HibernateError, Result, BUFFER_PAGES,
+};
 use crate::imagemover::ImageMover;
 use crate::keyman::HibernateKeyManager;
 use crate::snapdev::SnapshotDevice;
 use crate::splitter::ImageSplitter;
-use crate::{
-    debug, error, get_fs_stats, info, lock_process_memory, preallocate_header_file,
-    preallocate_hiberfile, preallocate_log_file, preallocate_metadata_file, replay_logs,
-    save_swappiness, unlock_process_memory, warn, write_swappiness,
-};
+use crate::sysfs::Swappiness;
+use crate::{debug, error, info, warn};
 use libc;
+use std::ffi::CString;
 use std::fs::create_dir;
 use std::io::Write;
+use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 const HIBERNATE_DIR: &str = "/mnt/stateful_partition/unencrypted/hibernate";
 const SUSPEND_SWAPPINESS: i32 = 100;
-// How many pages comprise a single buffer.
-const BUFFER_PAGES: usize = 32;
 // How low stateful free space is before we clean up the hiberfile after each
 // hibernate.
 const LOW_DISK_FREE_THRESHOLD: u64 = 10;
@@ -82,10 +85,10 @@ impl SuspendConductor {
         let mut log_file = preallocate_log_file(true)?;
         // Don't allow the logfile to log as it creates a deadlock.
         log_file.set_logging(false);
-        let fs_stats = get_fs_stats(Path::new(HIBERNATE_DIR))?;
+        let fs_stats = Self::get_fs_stats(Path::new(HIBERNATE_DIR))?;
         lock_process_memory()?;
-        let mut swappiness = save_swappiness()?;
-        write_swappiness(&mut swappiness.file, SUSPEND_SWAPPINESS)?;
+        let mut swappiness = Swappiness::new()?;
+        swappiness.set_swappiness(SUSPEND_SWAPPINESS)?;
         let mut key_manager = HibernateKeyManager::new();
         // Set up the hibernate metadata encryption keys. This was populated
         // at login time by a previous instance of this process.
@@ -252,5 +255,23 @@ impl SuspendConductor {
         }
 
         Ok(())
+    }
+
+    fn get_fs_stats(path: &Path) -> Result<libc::statvfs> {
+        let path_str_c = CString::new(path.as_os_str().as_bytes()).unwrap();
+        let mut stats: libc::statvfs;
+
+        let rc = unsafe {
+            // It's safe to zero out a new struct.
+            stats = std::mem::zeroed();
+            // It's safe to call this libc function with a struct we made ourselves.
+            libc::statvfs(path_str_c.as_ptr(), &mut stats)
+        };
+
+        if rc < 0 {
+            return Err(HibernateError::StatvfsError(sys_util::Error::last()));
+        }
+
+        Ok(stats)
     }
 }
