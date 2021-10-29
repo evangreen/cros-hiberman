@@ -55,40 +55,40 @@ Resume is slightly harder to follow, because there is the "resume" path, the "fa
  * The system powers on like any other boot. AP firmware runs, the Chrome ball delights our senses, and chromeos_startup runs
  * chromeos_startup calls out to hiberman to read the cookie and determine if a hibernate resume is expected or not. This instantiation of hiberman always runs and exits quickly, as its only role this early in boot is to check the cookie and return.
  * From here, things fork into two paths. In the "resume path":
-  * The hibernate cookie is set, indicating there is a valid hibernate image the system may want to resume to
-  * Instead of mounting the stateful partition with read/write permissions, a dm-snapshot device is created on top of the stateful partition, and then the snapshot is mounted read/write.
-   * Reads hit the real stateful partition, but writes are transparently diverted into a snapshot area in RAM
-   * This is done to avoid modifying the stateful partition, which the hibernated image still has active mounts on
-  * Hiberman is invoked with the "resume" subcommand by upstart, sometime around when system-services start
-   * Hiberman will load the unencrypted portion of the hibernate metadata, which contains untrusted hints of the image size and header pages
-   * The resume cookie and metadata are cleared from disk to prevent resume crashes from looping infinitely
-   * Hiberman will divert its own logging to a file, anticipating a successful resume where writes from this boot are lost
-   * The header pages can be loaded into the kernel early, causing the kernel to allocate its large chunk of memory to store the hibernate image.
-   * Hiberman will begin loading the hibernate image into its own process memory, as a way to frontload the large and potentially slow disk read operation.
-   * Eventually hiberman will either load the whole image, or will stop early to prevent the system from becoming too low on memory. At this point, hiberman blocks and waits
-  * Boot continues to Chrome and the login screen.
-  * The user authenticates (for example, typing in their password and hitting enter)
-   * If the user who logs in is not the same as the user who hibernated, the hibernated image is discarded, the snapshot RAM image is merged into the stateful partition on disk, and future writes go directly to the stateful partition.
-   * The rest of this section assumes the user who logs in is the same user that hibernated.
-  * Cryptohome computes the hibernate key in a similar manner to how it computes the user's file system keys, and makes a d-bus call to hiberman to give it the hibernate secret key material.
-  * Hiberman wakes up from its slumber with the secret seed in hand. It uses this to derive the private key corresponding to the public key used at the beginning of hibernate.
-  * Hiberman uses the private key to decrypt the private portion of the metadata.
-  * Hiberman validates the hash of the header pages in the private metadata against what it observed while loading earlier. Resume is aborted if these don't match.
-  * Hiberman gets the random symmetric key used to encrypt the image
-  * Hiberman can then push the now-mostly-in-memory hibernate image into the kernel (through the snapshot device), decrypting as it goes
-  * Hiberman freezes all usermode processes except itself
-  * Hiberman asks the kernel to jump into the resumed image via the atomic restore ioctl
-   * Upon success, the resumed image is now running
-   * Upon failure, the snapshot device is committed to disk, suspend and resume logs are replayed to the syslog, and a fresh boot login continues normally.
+   * The hibernate cookie is set, indicating there is a valid hibernate image the system may want to resume to
+   * Instead of mounting the stateful partition with read/write permissions, a dm-snapshot device is created on top of the stateful partition, and then the snapshot is mounted read/write.
+     * Reads hit the real stateful partition, but writes are transparently diverted into a snapshot area in RAM
+     * This is done to avoid modifying the stateful partition, which the hibernated image still has active mounts on
+   * Hiberman is invoked with the "resume" subcommand by upstart, sometime around when system-services start
+     * Hiberman will load the unencrypted portion of the hibernate metadata, which contains untrusted hints of the image size and header pages
+     * The resume cookie and metadata are cleared from disk to prevent resume crashes from looping infinitely
+     * Hiberman will divert its own logging to a file, anticipating a successful resume where writes from this boot are lost
+     * The header pages can be loaded into the kernel early, causing the kernel to allocate its large chunk of memory to store the hibernate image.
+     * Hiberman will begin loading the hibernate image into its own process memory, as a way to frontload the large and potentially slow disk read operation.
+     * Eventually hiberman will either load the whole image, or will stop early to prevent the system from becoming too low on memory. At this point, hiberman blocks and waits
+   * Boot continues to Chrome and the login screen.
+   * The user authenticates (for example, typing in their password and hitting enter)
+     * If the user who logs in is not the same as the user who hibernated, the hibernated image is discarded, the snapshot RAM image is merged into the stateful partition on disk, and future writes go directly to the stateful partition.
+     * The rest of this section assumes the user who logs in is the same user that hibernated.
+   * Cryptohome computes the hibernate key in a similar manner to how it computes the user's file system keys, and makes a d-bus call to hiberman to give it the hibernate secret key material.
+   * Hiberman wakes up from its slumber with the secret seed in hand. It uses this to derive the private key corresponding to the public key used at the beginning of hibernate.
+   * Hiberman uses the private key to decrypt the private portion of the metadata.
+   * Hiberman validates the hash of the header pages in the private metadata against what it observed while loading earlier. Resume is aborted if these don't match.
+   * Hiberman gets the random symmetric key used to encrypt the image
+   * Hiberman can then push the now-mostly-in-memory hibernate image into the kernel (through the snapshot device), decrypting as it goes
+   * Hiberman freezes all usermode processes except itself
+   * Hiberman asks the kernel to jump into the resumed image via the atomic restore ioctl
+     * Upon success, the resumed image is now running
+     * Upon failure, the snapshot device is committed to disk, suspend and resume logs are replayed to the syslog, and a fresh boot login continues normally.
  * In the "no resume" path, where there is no valid hibernate image:
-  * The cookie is not set, so the stateful partition is mounted directly with read/write permissions.
-  * Hiberman is still invoked with the "resume" subcommand during init
-   * Common to the successful resume case, hiberman attempts to read the metadata file, but discovers there is no valid image to resume
-   * Also common to the successful resume case, hiberman blocks waiting for its secret key material
-   * Eventually, a user logs in
-   * Cryptohome makes its d-bus call to hand hibernate the secret key material
-   * Hiberman computes the asymmetric hibernate keypair, but discards the private portion
-   * The public portion is saved in a ramfs file, to be used in the first step of a future hibernate
+   * The cookie is not set, so the stateful partition is mounted directly with read/write permissions.
+   * Hiberman is still invoked with the "resume" subcommand during init
+     * Common to the successful resume case, hiberman attempts to read the metadata file, but discovers there is no valid image to resume
+     * Also common to the successful resume case, hiberman blocks waiting for its secret key material
+     * Eventually, a user logs in
+     * Cryptohome makes its d-bus call to hand hibernate the secret key material
+     * Hiberman computes the asymmetric hibernate key pair, but discards the private portion
+     * The public portion is saved in a ramfs file, to be used in the first step of a future hibernate
 
 Upon a successful resume, the tail end of the hiberman suspend paths runs. It does the following:
  * Unfreezes all other userspace processes
@@ -107,7 +107,7 @@ In cases where more than 50% of RAM is in use when hibernate is initiated, swap 
 
 Another interesting challenge presented by hibernate is the fact that the hibernated image maintains active mounts on file systems. This means that in between the time the snapshot is taken, and when it's been fully resumed, modifications to areas like the stateful partition are not allowed. If this is violated, the resumed kernel's in-memory file system structures will not be consistent with what's on disk, likely resulting in corruption or failed accesses.
 
-This presents a challenge for the entire resume process, which consists of booting Chrome all the way through the login prompt in order to get the authentication-derived asymmetric keypair. To get this far in boot without modifying the stateful partition, we utilize dm-snapshot (not to be confused with the hibernate snapshot). With dm-snapshot we can create a block device where reads come from another block device, but writes are diverted elsewhere. This gives the system the appearance of having a read/write file system, but in this case all writes are diverted to a loop device backed by a ramfs file. Upon a successful resume, all writes to the stateful partition that happened during this resume boot are effectively lost. It's as if that resume boot never happened, which is exactly what the hibernated kernel needs. Upon a failed or aborted resume, we merge the RAM writes back down to the stateful partition. Once this is complete, we transparently rearrange the dm table so that future writes go directly to the stateful partition, instead of diverting elsewhere.
+This presents a challenge for the entire resume process, which consists of booting Chrome all the way through the login prompt in order to get the authentication-derived asymmetric key pair. To get this far in boot without modifying the stateful partition, we utilize dm-snapshot (not to be confused with the hibernate snapshot). With dm-snapshot we can create a block device where reads come from another block device, but writes are diverted elsewhere. This gives the system the appearance of having a read/write file system, but in this case all writes are diverted to a loop device backed by a ramfs file. Upon a successful resume, all writes to the stateful partition that happened during this resume boot are effectively lost. It's as if that resume boot never happened, which is exactly what the hibernated kernel needs. Upon a failed or aborted resume, we merge the RAM writes back down to the stateful partition. Once this is complete, we transparently rearrange the dm table so that future writes go directly to the stateful partition, instead of diverting elsewhere.
 
 One constraint of the dm-snapshot approach is that it's important that nothing attempts to write too wildly to the stateful partition, since the writes are stored in RAM. Most components are quiet before any user has logged in, but system components like update_engine and possibly ARCVM will need to be aware of hibernate resume boots. The consequences of violating this constraint are that stateful writes begin failing, which doesn't pose any risk to user data, but does require a reboot to recover from.
 
@@ -145,9 +145,9 @@ The rest of the files implement low level helper functionality, either an indivi
  * files.rs - A loose collection of functions that create or open the stateful files used by hibernate. Possibly to be overridden during testing.
  * hiberlog.rs - Handles the more-complicated-than-average task of logging. This module can store logs in memory, divert them to a DiskFile, push them out to the syslogger, and/or write them to /dev/kmsg.
  * hibermeta.rs - Encapsulates management of the hibernate metadata structure, including loading/storing it on disk, and encrypting/decrypting the private portion.
- * hiberutil.rs - A miscellanous grab bag of functions used across several modules.
+ * hiberutil.rs - A miscellaneous grab bag of functions used across several modules.
  * imagemover.rs - The "pump" of the hibernate image pipeline, this is the component calling read() and write() to move data between two file descriptors.
- * keyman.rs - Encapsluates creation and management of the asymmetric keypair used to protect the private hibernate metadata.
+ * keyman.rs - Encapsluates creation and management of the asymmetric key pair used to protect the private hibernate metadata.
  * mmapbuf.rs - A helper object to create large aligned buffers (which are a requirement for files opened with O_DIRECT).
  * preloader.rs - An object that can be inserted in the image pipeline that will load contents from disk early and store it in memory for a spell.
  * snapdev.rs - Encapsulates ioctl interactions with /dev/snapshot.

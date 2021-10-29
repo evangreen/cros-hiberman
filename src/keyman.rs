@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-//! Implement key management of the top level asymmetric keypair, used to
+//! Implement key management of the top level asymmetric key pair, used to
 //! protect the hibernate metadata encryption key.
 
 use crate::hibermeta::{HibernateMetadata, HIBERNATE_DATA_KEY_SIZE, HIBERNATE_META_KEY_SIZE};
@@ -24,7 +24,7 @@ static PUBLIC_KEY_NAME: &str = "pubkey";
 /// resume now with --test-keys.
 const TEST_KEY_MATERIAL: &[u8; HIBERNATE_META_KEY_SIZE] = b"TestHibernateKeyMaterial12345678";
 
-/// The HibernateKeyManager stores the public and private keypair. The public
+/// The HibernateKeyManager stores the public and private key pair. The public
 /// side is used to encrypt the hibernate metadata at suspend time. The private
 /// side is used to decrypt that same private metadata. An asymmetric key is
 /// used so that the hibernate image decryption key is not sitting around in
@@ -165,7 +165,7 @@ impl HibernateKeyManager {
             }
         };
 
-        // Create a new random key, and fire up a DH shared secret deriver.
+        // Create a new random key, and fire up a DH shared secret.
         let ephemeral_key = PKey::generate_x25519().unwrap();
         let mut deriver = Deriver::new(&ephemeral_key).unwrap();
         deriver.set_peer(public_key).unwrap();
@@ -191,7 +191,7 @@ impl HibernateKeyManager {
         // Load the ephemeral public key.
         let ephemeral_public =
             PKey::public_key_from_raw_bytes(&metadata.meta_eph_public, Id::X25519).unwrap();
-        // Fire up a deriver and load both keys.
+        // Fire up a DH and load both keys.
         let mut deriver = Deriver::new(self.private_key.as_ref().unwrap()).unwrap();
         deriver.set_peer(&ephemeral_public).unwrap();
 
@@ -199,8 +199,8 @@ impl HibernateKeyManager {
         self.install_derived_key(metadata, &mut deriver)
     }
 
-    /// Run a set up deriver to get the shared key, and install it into the
-    /// metadata for future encryption or decryption of private data.
+    /// Derive the shared key, and install it into the metadata for future
+    /// encryption or decryption of private data.
     fn install_derived_key(
         &self,
         metadata: &mut HibernateMetadata,

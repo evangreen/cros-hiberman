@@ -54,8 +54,8 @@ pub const HIBERNATE_DATA_IV_SIZE: usize = HIBERNATE_DATA_KEY_SIZE;
 /// bump the version) if PrivateHibernateMetadata outgrows it.
 pub const HIBERNATE_META_PRIVATE_SIZE: usize = 0x400;
 
-/// Define the size of the asymmetric keypairs used to encrypt the
-/// hibernate metadata.
+/// Define the size of the asymmetric key pairs used to encrypt the hibernate
+/// metadata.
 pub const HIBERNATE_META_KEY_SIZE: usize = 32;
 
 /// Define the software representation of the hibernate metadata.
@@ -75,7 +75,7 @@ pub struct HibernateMetadata {
     /// The first byte of data, in plaintext. This is needed to coerce the kernel
     /// into doing its image allocation. Random IV used for metadata encryption.
     pub first_data_byte: u8,
-    /// Public side of the ephemeral keypair used in Diffie-Hellman to derive
+    /// Public side of the ephemeral key pair used in Diffie-Hellman to derive
     /// the metadata key.
     pub meta_eph_public: [u8; HIBERNATE_META_KEY_SIZE],
     /// Random IV used for metadata encryption.
@@ -108,8 +108,8 @@ pub struct PublicHibernateMetadata {
     /// The first byte of data, needed to coerce the kernel into doing its big
     /// allocation.
     first_data_byte: u8,
-    /// Public side of the ephemeral keypair used in Diffie-Hellman to
-    /// derive the metadata key.
+    /// Public side of the ephemeral key pair used in Diffie-Hellman to derive
+    /// the metadata key.
     meta_eph_public: [u8; HIBERNATE_META_KEY_SIZE],
     /// IV used for private portion of metadata.
     private_iv: [u8; HIBERNATE_DATA_IV_SIZE],

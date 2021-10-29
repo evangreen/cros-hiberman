@@ -40,7 +40,7 @@ pub fn hibernate(options: HibernateOptions) -> Result<()> {
 // image, this still potentially blocks waiting to get the hibernate key from
 // cryptohome so it can be saved for the next hibernate. If there is a valid
 // resume image, this returns if there was an error resuming the system. Upon a
-// successful resume, this fuction does not return, as the system will be
+// successful resume, this function does not return, as the system will be
 // executing in the resumed image.
 pub fn resume(options: ResumeOptions) -> Result<()> {
     let mut conductor = ResumeConductor::new()?;

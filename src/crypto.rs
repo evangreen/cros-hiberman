@@ -120,7 +120,7 @@ impl Write for CryptoWriter<'_> {
 
 /// The CryptoReader object is nearly identical to the CryptoWriter struct,
 /// except it supports being hooked up on the read side of the ImageMover.
-/// Implementing the read side is signficantly more annoying than implementing
+/// Implementing the read side is significantly more annoying than implementing
 /// the write side because of OpenSSL's requirement that the crypto output
 /// buffer be at least one block larger than the input buffer. It would be
 /// fairly simple to just decrypt to a separate buffer first, but that results

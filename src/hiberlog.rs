@@ -116,7 +116,7 @@ macro_rules! debug {
     ($($args:tt)+) => ($crate::log!($crate::hiberlog::Priority::Debug, $($args)*))
 }
 
-/// Define the possibilites as to where to route log lines to.
+/// Define the possibilities as to where to route log lines to.
 pub enum HiberlogOut {
     /// Don't push log lines anywhere for now, just keep them in memory.
     BufferInMemory,
@@ -460,7 +460,7 @@ fn replay_log_file(file: &mut dyn Read, name: &str) {
 fn replay_line(line: String) {
     // The log lines are in kmsg format, like:
     // <11>hiberman: [src/hiberman.rs:529] Hello 2004
-    // Trim off the first colon, evertything after is line contents.
+    // Trim off the first colon, everything after is line contents.
     let mut elements = line.splitn(2, ": ");
     let header = elements.next().unwrap();
     let contents = match elements.next() {
