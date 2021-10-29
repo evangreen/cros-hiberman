@@ -152,9 +152,7 @@ impl DiskFile {
                     .open(&blockdev_path)
                 {
                     Ok(f) => f,
-                    Err(e) => {
-                        return Err(HibernateError::OpenFileError(blockdev_path.to_string(), e))
-                    }
+                    Err(e) => return Err(HibernateError::OpenFileError(blockdev_path, e)),
                 };
             }
             Some(f) => {
@@ -260,13 +258,11 @@ impl Read for DiskFile {
             let end = offset + this_io_length;
             let mut slice = [IoSliceMut::new(&mut buf[offset..end])];
             let bytes_done = self.blockdev.read_vectored(&mut slice)?;
-            if bytes_done != this_io_length {
-                if self.logging {
-                    error!(
-                        "DiskFile only did {:x?}/{:x?} I/O",
-                        bytes_done, this_io_length
-                    );
-                }
+            if bytes_done != this_io_length && self.logging {
+                error!(
+                    "DiskFile only did {:x?}/{:x?} I/O",
+                    bytes_done, this_io_length
+                );
             }
 
             self.current_position += bytes_done as u64;
@@ -307,13 +303,11 @@ impl Write for DiskFile {
             let end = offset + this_io_length;
             let slice = [IoSlice::new(&buf[offset..end])];
             let bytes_done = self.blockdev.write_vectored(&slice)?;
-            if bytes_done != this_io_length {
-                if self.logging {
-                    error!(
-                        "DiskFile only wrote {:x?}/{:x?} I/O",
-                        bytes_done, this_io_length
-                    );
-                }
+            if bytes_done != this_io_length && self.logging {
+                error!(
+                    "DiskFile only wrote {:x?}/{:x?} I/O",
+                    bytes_done, this_io_length
+                );
             }
 
             self.current_position += bytes_done as u64;

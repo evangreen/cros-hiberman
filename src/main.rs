@@ -157,7 +157,7 @@ Options are:
 
 fn hiberman_hibernate(args: &mut std::env::Args) -> std::result::Result<(), ()> {
     init_logging()?;
-    let mut options = HibernateOptions::new();
+    let mut options = HibernateOptions::default();
     for arg in args {
         match arg.as_ref() {
             "--help" | "-h" => {
@@ -211,7 +211,7 @@ Options are:
 
 fn hiberman_resume(args: &mut std::env::Args) -> std::result::Result<(), ()> {
     init_logging()?;
-    let mut options = ResumeOptions::new();
+    let mut options = ResumeOptions::default();
     for arg in args {
         match arg.as_ref() {
             "--help" | "-h" => {
@@ -286,7 +286,7 @@ fn hiberman_main() -> std::result::Result<(), ()> {
     match subcommand.as_ref() {
         "--help" | "-h" | "help" => {
             app_usage(false);
-            return Ok(());
+            Ok(())
         }
         "cat" => hiberman_cat(&mut args),
         "cookie" => hiberman_cookie(&mut args),
@@ -294,7 +294,7 @@ fn hiberman_main() -> std::result::Result<(), ()> {
         "resume" => hiberman_resume(&mut args),
         _ => {
             error!("unknown subcommand: {}", subcommand);
-            return Err(());
+            Err(())
         }
     }
 }
@@ -305,5 +305,5 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    //use super::*;
 }

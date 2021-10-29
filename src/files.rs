@@ -8,7 +8,6 @@ use crate::diskfile::{BouncedDiskFile, DiskFile};
 use crate::hiberutil::{get_page_size, get_total_memory_pages, HibernateError, Result};
 use crate::splitter::HIBER_HEADER_MAX_SIZE;
 use crate::{debug, info};
-use libc;
 use std::fs::{create_dir, File, OpenOptions};
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
@@ -77,7 +76,7 @@ pub fn preallocate_hiberfile() -> Result<DiskFile> {
 
     // The maximum size of the hiberfile is half of memory, plus a little
     // fudge for rounding.
-    let memory_mb = get_total_memory_mb()?;
+    let memory_mb = get_total_memory_mb();
     let hiberfile_mb = (memory_mb / 2) + 2;
     debug!(
         "System has {} MB of memory, preallocating {} MB hiberfile",
@@ -132,16 +131,16 @@ pub fn open_log_file(suspend: bool) -> Result<BouncedDiskFile> {
 
 /// Helper function to get the total amount of physical memory on this system,
 /// in megabytes.
-fn get_total_memory_mb() -> Result<u32> {
+fn get_total_memory_mb() -> u32 {
     let pagesize = get_page_size() as i64;
     let pagecount = get_total_memory_pages() as i64;
 
     debug!("Pagesize {} pagecount {}", pagesize, pagecount);
     let mb = pagecount * pagesize / (1024 * 1024);
     if mb > 0xFFFFFFFF {
-        Ok(0xFFFFFFFFu32)
+        0xFFFFFFFFu32
     } else {
-        Ok(mb as u32)
+        mb as u32
     }
 }
 

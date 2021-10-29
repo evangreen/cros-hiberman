@@ -9,7 +9,7 @@ use crate::{debug, error, info};
 use dbus::blocking::Connection;
 use dbus::channel::MatchingReceiver;
 use dbus::message::MatchRule;
-use dbus_crossroads::{Context, Crossroads, MethodErr};
+use dbus_crossroads::{Context, Crossroads};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -34,11 +34,10 @@ impl HibernateDbusStateInternal {
 
     /// D-bus method called by cryptohome to set secret seed material derived
     /// from user authentication.
-    fn set_seed_material(&mut self, seed: &Vec<u8>) -> std::result::Result<(), MethodErr> {
+    fn set_seed_material(&mut self, seed: &[u8]) {
         info!("Received {} bytes of seed material", seed.len());
         self.call_count += 1;
-        self.seed_material = seed.clone();
-        Ok(())
+        self.seed_material = seed.to_owned();
     }
 }
 
@@ -98,7 +97,8 @@ impl HiberDbusConnectionInternal {
                 move |_ctx: &mut Context, state: &mut HibernateDbusState, (seed,): (Vec<u8>,)| {
                     // Here's what happens when the method is called.
                     let HibernateDbusState(state) = state;
-                    state.lock().unwrap().set_seed_material(&seed)
+                    state.lock().unwrap().set_seed_material(&seed);
+                    Ok(())
                 },
             );
         });
@@ -219,6 +219,6 @@ impl HiberDbusConnection {
             Err(_) => return false,
         };
 
-        return state.seed_material.len() >= MINIMUM_SEED_SIZE;
+        state.seed_material.len() >= MINIMUM_SEED_SIZE
     }
 }

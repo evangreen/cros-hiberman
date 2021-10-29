@@ -125,7 +125,7 @@ impl SnapshotDevice {
 
     /// Helper function to send an ioctl with no parameter and return a result.
     fn simple_ioctl(&mut self, ioctl: c_ulong, name: &str) -> Result<()> {
-        self.ioctl(ioctl, name, 0 as *mut c_void)
+        self.ioctl(ioctl, name, std::ptr::null_mut::<c_void>())
     }
 
     /// Helper function to send an ioctl and return a Result

@@ -52,7 +52,7 @@ impl ResumeConductor {
             metadata: HibernateMetadata::new()?,
             dbus_connection: None,
             key_manager: HibernateKeyManager::new(),
-            options: ResumeOptions::new(),
+            options: Default::default(),
         })
     }
 
@@ -272,13 +272,11 @@ impl ResumeConductor {
 
             mover_source = &mut decryptor;
             debug!("Image is encrypted");
+        } else if self.options.unencrypted {
+            warn!("Image is not encrypted");
         } else {
-            if self.options.unencrypted {
-                warn!("Image is not encrypted");
-            } else {
-                error!("Unencrypted images are not permitted without --unencrypted");
-                return Err(HibernateError::ImageUnencryptedError());
-            }
+            error!("Unencrypted images are not permitted without --unencrypted");
+            return Err(HibernateError::ImageUnencryptedError());
         }
 
         // If the preloader was used, then the first data byte was already sent

@@ -136,7 +136,7 @@ impl Fiemap {
             }
         }
 
-        return None;
+        None
     }
 
     /// Helper function to run the fiemap ioctl without any data to determine
@@ -221,12 +221,12 @@ impl Fiemap {
             }
 
             // Copy the extents returned from the ioctl out into the vector.
-            for i in 0..extents.len() {
+            for (i, extent) in extents.iter_mut().enumerate() {
                 let start = fiemap_len + (i * mem::size_of::<FiemapExtent>());
                 let end = start + mem::size_of::<FiemapExtent>();
                 // This is safe because the ioctl returned this many fiemap_extents.
                 // This copies from the u8 buffer back into safe (aligned) world.
-                extents[i] = std::ptr::read_unaligned(buffer[start..end].as_ptr() as *const _);
+                *extent = std::ptr::read_unaligned(buffer[start..end].as_ptr() as *const _);
             }
         }
 

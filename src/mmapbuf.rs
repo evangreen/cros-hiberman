@@ -28,7 +28,7 @@ impl MmapBuffer {
         let r = unsafe { libc::mmap(addr as *mut c_void, len as libc::size_t, prot, flags, -1, 0) };
 
         if r == libc::MAP_FAILED {
-            return Err(HibernateError::MmapError(sys_util::Error::last()));
+            Err(HibernateError::MmapError(sys_util::Error::last()))
         } else {
             Ok(Self {
                 data: r as *mut u8,
@@ -49,7 +49,7 @@ impl MmapBuffer {
     }
 
     /// Return the buffer contents as a mutable u8 slice.
-    pub fn u8_slice_mut(&self) -> &mut [u8] {
+    pub fn u8_slice_mut(&mut self) -> &mut [u8] {
         unsafe { std::slice::from_raw_parts_mut(self.data, self.len) }
     }
 }

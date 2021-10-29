@@ -174,7 +174,7 @@ impl ImageChunk {
     /// Create and initialize from the given source a new buffer of the
     /// specified size.
     pub fn new(source: &mut dyn Read, size: usize) -> Result<Self> {
-        let buffer = MmapBuffer::new(size)?;
+        let mut buffer = MmapBuffer::new(size)?;
         let buffer_slice = buffer.u8_slice_mut();
         let mut slice_mut = [IoSliceMut::new(&mut buffer_slice[..size])];
         let bytes_read = match source.read_vectored(&mut slice_mut) {

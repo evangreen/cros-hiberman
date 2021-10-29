@@ -220,7 +220,7 @@ impl<'a> ImageJoiner<'a> {
         }
 
         hash.copy_from_slice(&self.header_hash[..]);
-        return self.meta_pages;
+        self.meta_pages
     }
 
     /// Helper function to read contents from the header file, snarfing out the

@@ -47,7 +47,7 @@ impl Swappiness {
             return Err(HibernateError::FileIoError("Failed to seek".to_string(), e));
         }
 
-        match write!(self.file, "{}\n", value) {
+        match writeln!(self.file, "{}", value) {
             Err(e) => Err(HibernateError::FileIoError(
                 "Failed to write".to_string(),
                 e,
@@ -80,9 +80,8 @@ impl Swappiness {
 impl Drop for Swappiness {
     fn drop(&mut self) {
         debug!("Restoring swappiness to {}", self.swappiness);
-        match self.set_swappiness(self.swappiness) {
-            Err(e) => warn!("Failed to restore swappiness: {}", e),
-            Ok(_) => (),
-        };
+        if let Err(e) = self.set_swappiness(self.swappiness) {
+            warn!("Failed to restore swappiness: {}", e);
+        }
     }
 }

@@ -255,7 +255,7 @@ impl Hiberlog {
             }
         }
 
-        self.file.as_mut().and_then(|f| {
+        self.file.as_mut().map(|f| {
             let _ = f.write(&buf[..]);
             Some(f)
         });
@@ -367,7 +367,7 @@ pub fn flush_log() {
 /// shred the log data.
 pub fn clear_log_file(file: &mut BouncedDiskFile) -> Result<()> {
     let mut buf = [0u8; FLUSH_THRESHOLD];
-    buf[0] = '\n' as u8;
+    buf[0] = b'\n';
     file.rewind()?;
     if let Err(e) = file.write(&buf) {
         return Err(HibernateError::FileIoError(
@@ -478,7 +478,7 @@ fn replay_line(line: String) {
 
     // Now trim <11>hiberman into <11, and parse 11 out of the combined
     // priority + facility.
-    let facprio_string = header.splitn(2, ">").next().unwrap();
+    let facprio_string = header.splitn(2, '>').next().unwrap();
     let facprio: u8 = match facprio_string[1..].parse() {
         Ok(i) => i,
         Err(_) => {

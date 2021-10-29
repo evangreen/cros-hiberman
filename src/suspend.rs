@@ -26,7 +26,6 @@ use crate::snapdev::SnapshotDevice;
 use crate::splitter::ImageSplitter;
 use crate::sysfs::Swappiness;
 use crate::{debug, error, info, warn};
-use libc;
 use std::ffi::CString;
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
@@ -57,7 +56,7 @@ impl SuspendConductor {
             hiber_file: None,
             meta_file: None,
             snap_dev: None,
-            options: HibernateOptions::new(),
+            options: Default::default(),
             metadata: HibernateMetadata::new()?,
         })
     }
@@ -112,7 +111,7 @@ impl SuspendConductor {
             result.is_ok() && !self.options.dry_run,
             !self.options.dry_run,
         );
-        self.delete_data_if_disk_full(fs_stats)?;
+        self.delete_data_if_disk_full(fs_stats);
         result
     }
 
@@ -239,7 +238,7 @@ impl SuspendConductor {
     }
 
     /// Clean up the hibernate files, releasing that space back to other usermode apps.
-    fn delete_data_if_disk_full(&mut self, fs_stats: libc::statvfs) -> Result<()> {
+    fn delete_data_if_disk_full(&mut self, fs_stats: libc::statvfs) {
         let free_percent = fs_stats.f_bfree * 100 / fs_stats.f_blocks;
         if free_percent < LOW_DISK_FREE_THRESHOLD {
             debug!("Freeing hiberdata: FS is only {}% free", free_percent);
@@ -247,8 +246,6 @@ impl SuspendConductor {
         } else {
             debug!("Not freeing hiberfile: FS is {}% free", free_percent);
         }
-
-        Ok(())
     }
 
     /// Utility function to get the current stateful file system usage.

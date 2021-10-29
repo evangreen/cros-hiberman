@@ -94,39 +94,20 @@ pub enum HibernateError {
 pub type Result<T> = std::result::Result<T, HibernateError>;
 
 /// Options taken from the command line affecting hibernate.
+#[derive(Default)]
 pub struct HibernateOptions {
     pub dry_run: bool,
     pub unencrypted: bool,
     pub test_keys: bool,
 }
 
-impl HibernateOptions {
-    pub fn new() -> Self {
-        HibernateOptions {
-            dry_run: false,
-            unencrypted: false,
-            test_keys: false,
-        }
-    }
-}
-
 /// Options taken from the command line affecting resume.
+#[derive(Default)]
 pub struct ResumeOptions {
     pub dry_run: bool,
     pub unencrypted: bool,
     pub test_keys: bool,
     pub no_preloader: bool,
-}
-
-impl ResumeOptions {
-    pub fn new() -> Self {
-        ResumeOptions {
-            dry_run: false,
-            unencrypted: false,
-            test_keys: false,
-            no_preloader: false,
-        }
-    }
 }
 
 /// Convert anything to a u8 slice.
@@ -147,7 +128,7 @@ pub fn get_available_pages() -> usize {
 /// Get the total amount of memory (in pages) on this system.
 pub fn get_total_memory_pages() -> usize {
     let pagecount = unsafe { libc::sysconf(libc::_SC_PHYS_PAGES) as usize };
-    if pagecount <= 0 {
+    if pagecount == 0 {
         warn!(
             "Failed to get total memory (got {}). Assuming 4GB.",
             pagecount
