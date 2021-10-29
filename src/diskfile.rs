@@ -12,12 +12,17 @@ use std::fs::{File, OpenOptions};
 use std::io::{Error as IoError, ErrorKind, IoSlice, IoSliceMut, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::OpenOptionsExt;
 
+/// The BouncedDiskFile is a convencience wrapper around the DiskFile structure.
+/// It uses an internal buffer to avoid the stricter buffer alignment
+/// requirements associated with raw DiskFile access. Think of it as a more
+/// convenient, but slightly slower equivalent to the DiskFile.
 pub struct BouncedDiskFile {
     disk_file: DiskFile,
     buffer: MmapBuffer,
 }
 
 impl BouncedDiskFile {
+    /// Create a new BouncedDiskFile object.
     pub fn new(fs_file: &mut File, block_file: Option<File>) -> Result<BouncedDiskFile> {
         let page_size = get_page_size();
         Ok(BouncedDiskFile {
@@ -26,14 +31,19 @@ impl BouncedDiskFile {
         })
     }
 
+    /// Enable or disable logging on this file. Logging should be disabled if
+    /// this file is serving the log itself, otherwise a deadlock occurs.
     pub fn set_logging(&mut self, enable: bool) {
         self.disk_file.set_logging(enable)
     }
 
+    /// Sync file contents.
     pub fn sync_all(&self) -> std::io::Result<()> {
         self.disk_file.sync_all()
     }
 
+    /// Convenience method to reset the seek position back to the start of the
+    /// file.
     pub fn rewind(&mut self) -> Result<()> {
         self.disk_file.rewind()
     }
@@ -107,8 +117,14 @@ impl Seek for BouncedDiskFile {
     }
 }
 
-// A DiskFile can take in a preallocated file and read or write to it
-// by accessing the file blocks on disk directly. Operations are not buffered.
+/// A DiskFile can take in a preallocated file and read or write to it by
+/// accessing the file blocks on disk directly. In the cases we use, the file
+/// has its disk extents fully allocated, but they're all set as
+/// "uninitialized", meaning this effectively writes underneath the file system
+/// data. We are effectively using the file system as a "disk area reservation"
+/// system, in the absence of a dedicated hibernate partition. Operations are
+/// not buffered, and may have alignment requirements depending on whether or
+/// not the underlying block device was opened with O_DIRECT or not.
 pub struct DiskFile {
     fiemap: Fiemap,
     blockdev: File,
@@ -118,6 +134,10 @@ pub struct DiskFile {
 }
 
 impl DiskFile {
+    /// Create a new DiskFile structure, given an open file in the file system
+    /// (whose extents should be accessed directly), and the underlying block
+    /// device of that file. If no block devices is given, the stateful partition
+    /// is located and used.
     pub fn new(fs_file: &mut File, block_file: Option<File>) -> Result<DiskFile> {
         let fiemap = Fiemap::new(fs_file)?;
         let blockdev;
@@ -163,14 +183,19 @@ impl DiskFile {
         }
     }
 
+    /// Enable or disable logging coming from this DiskFile object. Logging
+    /// should be disabled on the file backing logging itself, otherwise a
+    /// logging deadlock results.
     pub fn set_logging(&mut self, enable: bool) {
         self.logging = enable;
     }
 
+    /// Sync the underlying block device.
     pub fn sync_all(&self) -> std::io::Result<()> {
         self.blockdev.sync_all()
     }
 
+    /// Convenience method to reset the file position back to the start of the file.
     pub fn rewind(&mut self) -> Result<()> {
         match self.seek(SeekFrom::Start(0)) {
             Ok(_) => Ok(()),
@@ -178,6 +203,9 @@ impl DiskFile {
         }
     }
 
+    /// Helper function to determine whether the current position has valid
+    /// bytes ahead of it within the current extent. If false, it indicates an
+    /// internal seek needs to be done.
     fn current_position_valid(&self) -> bool {
         let start = self.current_extent.fe_logical;
         let end = start + self.current_extent.fe_length;
@@ -250,9 +278,6 @@ impl Read for DiskFile {
 }
 
 impl Write for DiskFile {
-    // Write is just a copy of read with the low-level changed.
-    // TODO: Figure out how to refactor this. I'm stuck on the difference in mutability
-    // of the buffers between write and read.
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let mut offset = 0usize;
         let length = buf.len();

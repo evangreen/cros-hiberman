@@ -28,6 +28,8 @@ use crate::splitter::ImageJoiner;
 use crate::{debug, error, info, warn};
 use std::io::{Read, Write};
 
+/// The ResumeConductor orchestrates the various individual instruments that
+/// work in concert to resume the system from hibernation.
 pub struct ResumeConductor {
     header_file: Option<DiskFile>,
     hiber_file: Option<DiskFile>,
@@ -40,6 +42,7 @@ pub struct ResumeConductor {
 }
 
 impl ResumeConductor {
+    /// Create a new resume conductor in prepration for an impending resume.
     pub fn new() -> Result<Self> {
         Ok(ResumeConductor {
             header_file: None,
@@ -53,9 +56,9 @@ impl ResumeConductor {
         })
     }
 
-    // Public entry point into the resume process. In the case of a successful
-    // resume, this does not return, as the resume image is running instead. In
-    // the case of resume failure, an error is returned.
+    /// Public entry point into the resume process. In the case of a successful
+    /// resume, this does not return, as the resume image is running instead. In
+    /// the case of resume failure, an error is returned.
     pub fn resume(&mut self, options: ResumeOptions) -> Result<()> {
         info!("Beginning resume");
         self.options = options;
@@ -82,8 +85,8 @@ impl ResumeConductor {
         result
     }
 
-    // Helper function to perform the meat of the resume action now that the
-    // logging is routed.
+    /// Helper function to perform the meat of the resume action now that the
+    /// logging is routed.
     fn resume_inner(&mut self) -> Result<()> {
         // Clear the cookie near the start to avoid situations where we repeatedly
         // try to resume but fail.
@@ -125,7 +128,7 @@ impl ResumeConductor {
         result
     }
 
-    // Inner helper function to read the resume image and launch it.
+    /// Inner helper function to read the resume image and launch it.
     fn resume_system(&mut self) -> Result<()> {
         let mut log_file = open_log_file(false)?;
         // Don't allow the logfile to log as it creates a deadlock.
@@ -161,7 +164,7 @@ impl ResumeConductor {
         result
     }
 
-    // Load the resume image from disk into memory.
+    /// Load the resume image from disk into memory.
     fn read_image(&mut self) -> Result<()> {
         let page_size = get_page_size();
         let snap_dev = self.snap_dev.as_mut().unwrap();
@@ -325,7 +328,8 @@ impl ResumeConductor {
         Ok(())
     }
 
-    // Wait for the hibernate key seed, and then feed it to the key manager.
+    /// Block waiting for the hibernate key seed, and then feed it to the key
+    /// manager.
     fn populate_seed(&mut self) -> Result<()> {
         let dbus_connection = self.dbus_connection.as_mut().unwrap();
         let got_seed_already = dbus_connection.has_seed_material();
@@ -353,11 +357,11 @@ impl ResumeConductor {
         self.key_manager.set_private_key(&seed)
     }
 
-    // To get the kernel to do its big allocation, we sent one byte of data to
-    // it after sending the header pages. But now we're out of alignment for the
-    // main move. This function sends the rest of the page to get things
-    // realigned, and verifies the contents of the first byte. This keeps the
-    // ImageMover uncomplicated and none the wiser.
+    /// To get the kernel to do its big allocation, we sent one byte of data to
+    /// it after sending the header pages. But now we're out of alignment for the
+    /// main move. This function sends the rest of the page to get things
+    /// realigned, and verifies the contents of the first byte. This keeps the
+    /// ImageMover uncomplicated and none the wiser.
     fn read_first_partial_page(&mut self, source: &mut dyn Read, page_size: usize) -> Result<()> {
         let mut buf = vec![0u8; page_size];
         // Get the whole page from the source, including the first byte.
@@ -401,7 +405,7 @@ impl ResumeConductor {
         Ok(())
     }
 
-    // Jump into the already-loaded resume image.
+    /// Jump into the already-loaded resume image.
     fn launch_resume_image(&mut self) -> Result<()> {
         // Clear the valid flag and set the resume flag to indicate this image
         // was resumed into.
@@ -437,7 +441,7 @@ impl ResumeConductor {
         result
     }
 
-    // Save the public key for future hibernate attempts.
+    /// Save the public key for future hibernate attempts.
     fn save_public_key(&mut self) -> Result<()> {
         info!("Saving public key for future hibernate");
         let key_manager = HibernateKeyManager::new();

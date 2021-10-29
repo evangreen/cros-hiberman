@@ -2,7 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-//! Implements support for moving an image from one fd to another, with alignment and transformation.
+//! Implements support for moving an image from one fd to another, with
+//! alignment and transformation. This object represents the "motor" driving
+//! data from one file descriptor to another.
 
 use crate::hiberutil::{HibernateError, Result};
 use crate::mmapbuf::MmapBuffer;
@@ -10,6 +12,11 @@ use crate::{debug, error, info, warn};
 use libc::{self, loff_t};
 use std::io::{IoSliceMut, Read, Write};
 
+/// An ImageMover represents an engine used to move data from a source to a
+/// destination. It provides alignment and batching, but does not do any
+/// transformations to the data itself. Transformation objects can be hooked up
+/// to the source and destination sides of it to form a sort of pipeline of
+/// data, with this object as the active "pump".
 pub struct ImageMover<'a> {
     source_file: &'a mut dyn Read,
     dest_file: &'a mut dyn Write,
@@ -23,8 +30,13 @@ pub struct ImageMover<'a> {
     percent_reported: u32,
 }
 
-// Push data from one location to another in chunks, using an aligned buffer.
 impl<'a> ImageMover<'a> {
+    /// Create a new ImageMover object. The source_size parameter represents the
+    /// total number of bytes to move. The source_chunk parameter represents the
+    /// chunk size the mover should use when reading from the source. Similarly,
+    /// the dest_chunk parameter represents the chunk size the mover should use
+    /// when writing to the destination. If these are different, the image mover
+    /// will batch reads or writes using an internal buffer.
     pub fn new(
         source_file: &'a mut dyn Read,
         dest_file: &'a mut dyn Write,
@@ -55,6 +67,9 @@ impl<'a> ImageMover<'a> {
         })
     }
 
+    /// Write out the contents of the internal buffer to the destination, in
+    /// chunks of dest_chunk size, regardless of whether or not the buffer has
+    /// at least dest_chunk bytes.
     fn flush_buffer(&mut self) -> Result<()> {
         if self.buffer_offset == 0 {
             return Ok(());
@@ -105,6 +120,8 @@ impl<'a> ImageMover<'a> {
         Ok(())
     }
 
+    /// Read a source sized chunk into the internal buffer. Write out any
+    /// complete destination sized chunks.
     fn move_chunk(&mut self) -> Result<()> {
         // Move the whole rest of the image, capped to the source chunk size,
         // and capped to the remaining buffer space.
@@ -142,6 +159,7 @@ impl<'a> ImageMover<'a> {
         Ok(())
     }
 
+    /// Move the entire image from the source to the destination.
     pub fn move_all(&mut self) -> Result<()> {
         debug!("Moving image");
         while self.bytes_done + (self.buffer_offset as i64) < self.source_size {

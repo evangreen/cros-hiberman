@@ -9,27 +9,50 @@ use crate::hiberutil::{get_page_size, get_total_memory_pages, HibernateError, Re
 use crate::splitter::HIBER_HEADER_MAX_SIZE;
 use crate::{debug, info};
 use libc;
-use std::fs::{File, OpenOptions};
+use std::fs::{create_dir, File, OpenOptions};
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 
-static HIBERNATE_DIR: &str = "/mnt/stateful_partition/unencrypted/hibernate";
-static HIBER_META_NAME: &str = "metadata";
-static HIBER_META_SIZE: i64 = 1024 * 1024 * 8;
-static HIBER_HEADER_NAME: &str = "header";
-static HIBER_DATA_NAME: &str = "hiberfile";
-static RESUME_LOG_FILE_NAME: &str = "resume_log";
-static SUSPEND_LOG_FILE_NAME: &str = "suspend_log";
-// The size of the preallocated log files.
-static HIBER_LOG_SIZE: i64 = 1024 * 1024 * 4;
+/// Define the directory where hibernate state files are kept.
+pub const HIBERNATE_DIR: &str = "/mnt/stateful_partition/unencrypted/hibernate";
+/// Define the name of the hibernate metadata.
+const HIBER_META_NAME: &str = "metadata";
+/// Define the preallocated size of the hibernate metadata file.
+const HIBER_META_SIZE: i64 = 1024 * 1024 * 8;
+/// Define the name of the header pages file.
+const HIBER_HEADER_NAME: &str = "header";
+/// Define the name of the main hibernate image data file.
+const HIBER_DATA_NAME: &str = "hiberfile";
+/// Define the name of the resume log file.
+const RESUME_LOG_FILE_NAME: &str = "resume_log";
+/// Define the name of the suspend log file.
+const SUSPEND_LOG_FILE_NAME: &str = "suspend_log";
+/// Define the size of the preallocated log files.
+const HIBER_LOG_SIZE: i64 = 1024 * 1024 * 4;
 
+/// Create the hibernate directory if it does not exist.
+pub fn create_hibernate_dir() -> Result<()> {
+    if !Path::new(HIBERNATE_DIR).exists() {
+        debug!("Creating hibernate directory");
+        if let Err(e) = create_dir(HIBERNATE_DIR) {
+            return Err(HibernateError::CreateDirectoryError(
+                HIBERNATE_DIR.to_string(),
+                e,
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Preallocates the metadata file and opens it for I/O.
 pub fn preallocate_metadata_file() -> Result<BouncedDiskFile> {
     let metadata_path = Path::new(HIBERNATE_DIR).join(HIBER_META_NAME);
     let mut meta_file = preallocate_file(&metadata_path, HIBER_META_SIZE)?;
     BouncedDiskFile::new(&mut meta_file, None)
 }
 
-// Preallocate the suspend or resume log file.
+/// Preallocate and open the suspend or resume log file.
 pub fn preallocate_log_file(suspend: bool) -> Result<BouncedDiskFile> {
     let name = match suspend {
         true => SUSPEND_LOG_FILE_NAME,
@@ -41,12 +64,14 @@ pub fn preallocate_log_file(suspend: bool) -> Result<BouncedDiskFile> {
     BouncedDiskFile::new(&mut log_file, None)
 }
 
+/// Preallocate the header pages file.
 pub fn preallocate_header_file() -> Result<DiskFile> {
     let path = Path::new(HIBERNATE_DIR).join(HIBER_HEADER_NAME);
     let mut file = preallocate_file(&path, HIBER_HEADER_MAX_SIZE)?;
     DiskFile::new(&mut file, None)
 }
 
+/// Preallocate the hibernate image file.
 pub fn preallocate_hiberfile() -> Result<DiskFile> {
     let hiberfile_path = Path::new(HIBERNATE_DIR).join(HIBER_DATA_NAME);
 
@@ -65,8 +90,8 @@ pub fn preallocate_hiberfile() -> Result<DiskFile> {
     DiskFile::new(&mut hiber_file, None)
 }
 
-// Open a pre-existing disk file with bounce buffer,
-// still with read and write permissions.
+/// Open a pre-existing disk file with bounce buffer,
+/// still with read and write permissions.
 pub fn open_bounced_disk_file(path: &Path) -> Result<BouncedDiskFile> {
     let mut file = match OpenOptions::new().read(true).write(true).open(path) {
         Ok(f) => f,
@@ -76,25 +101,25 @@ pub fn open_bounced_disk_file(path: &Path) -> Result<BouncedDiskFile> {
     BouncedDiskFile::new(&mut file, None)
 }
 
-// Open a pre-existing header file, still with read and write permissions.
+/// Open a pre-existing header file, still with read and write permissions.
 pub fn open_header_file() -> Result<DiskFile> {
     let path = Path::new(HIBERNATE_DIR).join(HIBER_HEADER_NAME);
     open_disk_file(&path)
 }
 
-// Open a pre-existing hiberfile, still with read and write permissions.
+/// Open a pre-existing hiberfile, still with read and write permissions.
 pub fn open_hiberfile() -> Result<DiskFile> {
     let hiberfile_path = Path::new(HIBERNATE_DIR).join(HIBER_DATA_NAME);
     open_disk_file(&hiberfile_path)
 }
 
-// Open a pre-existing hiberfile, still with read and write permissions.
+/// Open a pre-existing hiberfile, still with read and write permissions.
 pub fn open_metafile() -> Result<BouncedDiskFile> {
     let hiberfile_path = Path::new(HIBERNATE_DIR).join(HIBER_META_NAME);
     open_bounced_disk_file(&hiberfile_path)
 }
 
-// Open one of the log files, either the suspend or resume log.
+/// Open one of the log files, either the suspend or resume log.
 pub fn open_log_file(suspend: bool) -> Result<BouncedDiskFile> {
     let name = match suspend {
         true => SUSPEND_LOG_FILE_NAME,
@@ -105,6 +130,8 @@ pub fn open_log_file(suspend: bool) -> Result<BouncedDiskFile> {
     open_bounced_disk_file(&path)
 }
 
+/// Helper function to get the total amount of physical memory on this system,
+/// in megabytes.
 fn get_total_memory_mb() -> Result<u32> {
     let pagesize = get_page_size() as i64;
     let pagecount = get_total_memory_pages() as i64;
@@ -118,6 +145,8 @@ fn get_total_memory_mb() -> Result<u32> {
     }
 }
 
+/// Helper function used to preallocate space on a file using the fallocate() C
+/// library call.
 fn preallocate_file(path: &Path, size: i64) -> Result<File> {
     let file = match OpenOptions::new()
         .read(true)
@@ -138,7 +167,7 @@ fn preallocate_file(path: &Path, size: i64) -> Result<File> {
     Ok(file)
 }
 
-// Open a pre-existing disk file, still with read and write permissions.
+/// Open a pre-existing disk file, still with read and write permissions.
 fn open_disk_file(path: &Path) -> Result<DiskFile> {
     let mut file = match OpenOptions::new().read(true).write(true).open(path) {
         Ok(f) => f,

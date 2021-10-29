@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-//! Implement image encryption/decryption functionality.
+//! Implement image symmetric encryption functionality.
 
 use crate::hibermeta::{HIBERNATE_DATA_IV_SIZE, HIBERNATE_DATA_KEY_SIZE};
 use crate::hiberutil::Result;
@@ -10,8 +10,14 @@ use crate::mmapbuf::MmapBuffer;
 use openssl::symm::{Cipher, Crypter, Mode};
 use std::io::{IoSlice, IoSliceMut, Read, Write};
 
+/// Define the size of a symmetric encryption block. If the encryption algorithm
+/// is changed, be sure to keep this value in sync.
 const CRYPTO_BLOCK_SIZE: usize = HIBERNATE_DATA_KEY_SIZE;
 
+/// The CryptoWriter is an object that can be inserted in the image pipeline on
+/// the "write" side (in other words, somewhere on the destination side of the
+/// ImageMover). When written to, it will encrypt or decrypt contents and then
+/// pass them on to its pre-arranged destination.
 pub struct CryptoWriter<'a> {
     crypter: Crypter,
     dest_file: &'a mut dyn Write,
@@ -20,6 +26,10 @@ pub struct CryptoWriter<'a> {
 }
 
 impl<'a> CryptoWriter<'a> {
+    /// Set up a new CryptoWriter with the given write destination, key, and
+    /// mode (encrypt or decrypt). The buffer_size argument lets this structure
+    /// know how big of an internal buffer to allocate, representing the maximum
+    /// chunk size that will be passed to the final destination writes.
     pub fn new(
         dest_file: &'a mut dyn Write,
         key: [u8; HIBERNATE_DATA_KEY_SIZE],
@@ -108,6 +118,16 @@ impl Write for CryptoWriter<'_> {
     }
 }
 
+/// The CryptoReader object is nearly identical to the CryptoWriter struct,
+/// except it supports being hooked up on the read side of the ImageMover.
+/// Implementing the read side is signficantly more annoying than implementing
+/// the write side because of OpenSSL's requirement that the crypto output
+/// buffer be at least one block larger than the input buffer. It would be
+/// fairly simple to just decrypt to a separate buffer first, but that results
+/// in an extra buffer copy, which we'd like to avoid for what's potentially a
+/// multi-gigabyte operation. Instead, we decrypt as much as we can directly to
+/// the destination buffer, minus one block. We then do that block into a
+/// separate buffer, so that we minimize the extra copies.
 pub struct CryptoReader<'a> {
     crypter: Crypter,
     source_file: &'a mut dyn Read,
@@ -119,6 +139,11 @@ pub struct CryptoReader<'a> {
 }
 
 impl<'a> CryptoReader<'a> {
+    /// Create a new CryptoReader with the given source file, encryption key,
+    /// and mode (encrypt or decrypt). The buffer size indicates how big of an
+    /// internal buffer to create, which also represents the maximum sized read
+    /// that will ever be done from the source. Size this based on your expected
+    /// average read size.
     pub fn new(
         source_file: &'a mut dyn Read,
         key: [u8; HIBERNATE_DATA_KEY_SIZE],

@@ -11,9 +11,11 @@ use std::fs::File;
 use std::mem;
 use std::os::unix::io::AsRawFd;
 
+/// Define the Linux ioctl number for getting the fiemap.
 static FS_IOC_FIEMAP: c_ulong = 0xc020660b;
 
-// The C_Fiemap structure's format is mandated by the FS_IOC_FIEMAP ioctl.
+/// The C_Fiemap structure's format is mandated by the FS_IOC_FIEMAP ioctl. See
+/// the linux man pages for details.
 #[repr(C)]
 struct C_Fiemap {
     fm_start: u64,
@@ -24,7 +26,8 @@ struct C_Fiemap {
     fm_reserved: u32,
 }
 
-// The FiemapExtent structure's format is mandated by the FS_IOC_FIEMAP ioctl.
+/// The FiemapExtent structure's format is mandated by the FS_IOC_FIEMAP ioctl.
+/// See the linux man pages for details.
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct FiemapExtent {
@@ -36,41 +39,44 @@ pub struct FiemapExtent {
     fe_reserved: [u32; 3],
 }
 
+/// The Fiemap object wraps the retrieval (via ioctl) of a file's underlying
+/// extents on disk. Given a file, it will enumerate the areas of the underlying
+/// partition where this file resides.
 pub struct Fiemap {
     pub file_size: u64,
     pub extents: Vec<FiemapExtent>,
 }
 
-// Sync data before creating the extent map.
+/// Sync data before creating the extent map.
 static FIEMAP_FLAG_SYNC: u32 = 0x1;
 // Map extended attribute tree.
 //static FIEMAP_FLAG_XATTR: u32 = 0x2;
 
 // The last extent in a file.
 //static FIEMAP_EXTENT_LAST: u32 = 0x1;
-// Data location unknown.
+/// Data location unknown.
 static FIEMAP_EXTENT_UNKNOWN: u32 = 0x2;
-// Location still pending. Also sets FIEMAP_EXTENT_UNKNOWN.
+/// Location still pending. Also sets FIEMAP_EXTENT_UNKNOWN.
 static FIEMAP_EXTENT_DELALLOC: u32 = 0x4;
-// Data can not be read while the file system is unmounted.
+/// Data can not be read while the file system is unmounted.
 static FIEMAP_EXTENT_ENCODED: u32 = 0x8;
-// Data is encrypted. Also sets EXTENT_NO_BYPASS.
+/// Data is encrypted. Also sets EXTENT_NO_BYPASS.
 static FIEMAP_EXTENT_DATA_ENCRYPTED: u32 = 0x80;
-// Extent offsets may not be block aligned.
+/// Extent offsets may not be block aligned.
 static FIEMAP_EXTENT_ALIGNED: u32 = 0x100;
-// Data is mixed with metadata. Sets FIEMAP_EXTENT_NOT_ALIGNED.
+/// Data is mixed with metadata. Sets FIEMAP_EXTENT_NOT_ALIGNED.
 static FIEMAP_EXTENT_INLINE: u32 = 0x200;
-// Multiple files in a block. Sets FIEMAP_EXTENT_NOT_ALIGNED.
+/// Multiple files in a block. Sets FIEMAP_EXTENT_NOT_ALIGNED.
 static FIEMAP_EXTENT_TAIL: u32 = 0x400;
 // Space is allocated, but no data is written.
 //static FIEMAP_EXTENT_UNWRITTEN: u32 = 0x800;
 // File does not natively support extents. Result merged for efficiency.
 //static FIEMAP_EXTENT_MERGED: u32 = 0x1000;
-// Space shared with other files.
+/// Space shared with other files.
 static FIEMAP_EXTENT_SHARED: u32 = 0x2000;
 
-// Define the mask of flags that would be bad to see on a file you plan on
-// operating on directly.
+/// Define the mask of flags that would be bad to see on a file you plan on
+/// operating on directly.
 static FIEMAP_NO_RAW_ACCESS_FLAGS: u32 = FIEMAP_EXTENT_UNKNOWN
     | FIEMAP_EXTENT_DELALLOC
     | FIEMAP_EXTENT_ENCODED
@@ -81,6 +87,9 @@ static FIEMAP_NO_RAW_ACCESS_FLAGS: u32 = FIEMAP_EXTENT_UNKNOWN
     | FIEMAP_EXTENT_SHARED;
 
 impl Fiemap {
+    /// Create a new Fiemap object and run ioctls to load the fiemap for a given
+    /// file. On success, returns a Fiemap object that encapsulates the extents
+    /// for the file at the time this routine was run.
     pub fn new(source_file: &mut File) -> Result<Fiemap> {
         let file_size = source_file.metadata().unwrap().len();
         let extent_count = Fiemap::get_extent_count(source_file, 0, file_size, FIEMAP_FLAG_SYNC)?;
@@ -105,7 +114,8 @@ impl Fiemap {
             // now and fail. "Unwritten" is acceptable if the file is to be both written and
             // read from underneath the file system.
             if (extent.fe_flags & FIEMAP_NO_RAW_ACCESS_FLAGS) != 0 {
-                error!("File has bad flags {:x} for direct access. Extent logical {:x} physical {:x} len {:x}", extent.fe_flags, extent.fe_logical, extent.fe_physical, extent.fe_length);
+                error!("File has bad flags {:x} for direct access. Extent logical {:x} physical {:x} len {:x}",
+                       extent.fe_flags, extent.fe_logical, extent.fe_physical, extent.fe_length);
                 return Err(HibernateError::InvalidFiemapError(format!(
                     "Fiemap extent has unexpected flags {:x}",
                     extent.fe_flags
@@ -116,9 +126,10 @@ impl Fiemap {
         Ok(Fiemap { file_size, extents })
     }
 
+    /// Return the extent corresponding to the given offset in the file.
     pub fn extent_for_offset(&self, offset: u64) -> Option<&FiemapExtent> {
-        // Binary search would be faster here, but it's not clear if it's worth that
-        // level of fanciness.
+        // Binary search would be faster here, but it's not clear if it's worth
+        // that level of fanciness.
         for extent in &self.extents {
             if (extent.fe_logical <= offset) && ((extent.fe_logical + extent.fe_length) > offset) {
                 return Some(extent);
@@ -128,6 +139,10 @@ impl Fiemap {
         return None;
     }
 
+    /// Helper function to run the fiemap ioctl without any data to determine
+    /// how many extent structures are needed. In a regular file, this count
+    /// could go stale as soon as it is returned. This code assumes no other
+    /// process is manipulating the file at the same time.
     fn get_extent_count(
         source_file: &mut File,
         fm_start: u64,
@@ -158,6 +173,8 @@ impl Fiemap {
         Ok(param.fm_mapped_extents as u32)
     }
 
+    /// Execute the ioctl to get the extents, and convert them back to an array
+    /// of extent structures.
     fn get_extents(
         source_file: &mut File,
         fm_start: u64,

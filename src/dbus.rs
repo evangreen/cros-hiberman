@@ -14,11 +14,11 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-// Define the minimum acceptable seed material length.
+/// Define the minimum acceptable seed material length.
 const MINIMUM_SEED_SIZE: usize = 32;
 
-// Define the context shared between dbus calls. These must all have the Send
-// trait.
+/// Define the context shared between dbus calls. These must all have the Send
+/// trait.
 struct HibernateDbusStateInternal {
     call_count: u32,
     seed_material: Vec<u8>,
@@ -32,7 +32,8 @@ impl HibernateDbusStateInternal {
         }
     }
 
-    // D-bus method called to set secret seed material derived from user authentication.
+    /// D-bus method called by cryptohome to set secret seed material derived
+    /// from user authentication.
     fn set_seed_material(&mut self, seed: &Vec<u8>) -> std::result::Result<(), MethodErr> {
         info!("Received {} bytes of seed material", seed.len());
         self.call_count += 1;
@@ -41,8 +42,8 @@ impl HibernateDbusStateInternal {
     }
 }
 
-// Arc and Mutex are needed because crossroads takes ownership of the state
-// passed in, and requires the Send trait.
+/// Define the d-bus state. Arc and Mutex are needed because crossroads takes
+/// ownership of the state passed in, and requires the Send trait.
 #[derive(Clone)]
 struct HibernateDbusState(Arc<Mutex<HibernateDbusStateInternal>>);
 
@@ -52,13 +53,17 @@ impl HibernateDbusState {
     }
 }
 
-// Define the connection details to Dbus.
+/// Define the connection details to Dbus. This is the unprotected version, to
+/// be manipulated after acquiring the lock.
 pub struct HiberDbusConnectionInternal {
     conn: Connection,
     state: HibernateDbusState,
 }
 
 impl HiberDbusConnectionInternal {
+    /// Fire up a new system d-bus connection. Attempt to register the
+    /// well-known HibernateSeed name so cryptohome can call us. Create the
+    /// HibernateSeedInterface here as well.
     pub fn new() -> Result<Self> {
         info!("Setting up dbus");
         let conn = match Connection::new_system() {
@@ -118,6 +123,9 @@ impl HiberDbusConnectionInternal {
         Ok(HiberDbusConnectionInternal { conn, state })
     }
 
+    /// Public function used by the dbus thread to process requests until the
+    /// seed has been received. At that point we drop off since that's all we
+    /// need.
     pub fn receive_seed(&mut self) -> Result<()> {
         info!("Looping to receive seed");
         loop {
@@ -141,13 +149,15 @@ impl HiberDbusConnectionInternal {
     }
 }
 
-// Define a thread safe version of this structure.
+/// Define the thread safe version of the dbus connection state.
 pub struct HiberDbusConnection {
     internal: Arc<Mutex<HiberDbusConnectionInternal>>,
     thread: Option<thread::JoinHandle<()>>,
 }
 
 impl HiberDbusConnection {
+    /// Create a new dbus connection and announce ourselves on the bus. This
+    /// function does not start serving requests yet though.
     pub fn new() -> Result<Self> {
         Ok(HiberDbusConnection {
             internal: Arc::new(Mutex::new(HiberDbusConnectionInternal::new()?)),
@@ -155,6 +165,7 @@ impl HiberDbusConnection {
         })
     }
 
+    /// Fire up a thread to respond to dbus requests.
     pub fn spawn_dbus_server(&mut self) -> Result<()> {
         let arc_clone = Arc::clone(&self.internal);
         self.thread = Some(thread::spawn(move || {
@@ -167,9 +178,9 @@ impl HiberDbusConnection {
         Ok(())
     }
 
-    // Block waiting for the dbus server thread to finish, which happens after
-    // someone (eg cryptohome) has called our SetSeedMaterial method to hand us
-    // key material. Then return that material.
+    /// Block waiting for the dbus server thread to finish, which happens after
+    /// someone (eg cryptohome) has called our SetSeedMaterial method to hand us
+    /// key material. Then return that material.
     pub fn get_seed_material(&mut self) -> Result<Vec<u8>> {
         info!("Waiting for dbus server thread");
         // Wait for the dbus thread to exit.
@@ -194,8 +205,9 @@ impl HiberDbusConnection {
         Ok(state.seed_material.clone())
     }
 
-    // Returns true if seed material is already acquired, without waiting for
-    // the thread to finish.
+    /// Returns true if seed material is already acquired. Unlike
+    /// get_seed_material() this function does not block if the seed material is
+    /// not available.
     pub fn has_seed_material(&self) -> bool {
         let internal = self.internal.lock().unwrap();
         let HibernateDbusState(state) = &internal.state;

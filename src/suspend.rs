@@ -8,7 +8,8 @@ use crate::cookie::set_hibernate_cookie;
 use crate::crypto::CryptoWriter;
 use crate::diskfile::{BouncedDiskFile, DiskFile};
 use crate::files::{
-    preallocate_header_file, preallocate_hiberfile, preallocate_log_file, preallocate_metadata_file,
+    create_hibernate_dir, preallocate_header_file, preallocate_hiberfile, preallocate_log_file,
+    preallocate_metadata_file, HIBERNATE_DIR,
 };
 use crate::hiberlog::{flush_log, redirect_log, replay_logs, reset_log, HiberlogOut};
 use crate::hibermeta::{
@@ -27,17 +28,18 @@ use crate::sysfs::Swappiness;
 use crate::{debug, error, info, warn};
 use libc;
 use std::ffi::CString;
-use std::fs::create_dir;
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-const HIBERNATE_DIR: &str = "/mnt/stateful_partition/unencrypted/hibernate";
+/// Define the swappiness value we'll set during hibernation.
 const SUSPEND_SWAPPINESS: i32 = 100;
-// How low stateful free space is before we clean up the hiberfile after each
-// hibernate.
+/// Define how low stateful free space is before we clean up the hiberfile after
+/// each hibernate.
 const LOW_DISK_FREE_THRESHOLD: u64 = 10;
 
+/// The SuspendConductor weaves a delicate baton to guide us through the
+/// symphony of hibernation.
 pub struct SuspendConductor {
     header_file: Option<DiskFile>,
     hiber_file: Option<DiskFile>,
@@ -48,6 +50,7 @@ pub struct SuspendConductor {
 }
 
 impl SuspendConductor {
+    /// Create a new SuspendConductor in preparation for imminent hibernation.
     pub fn new() -> Result<Self> {
         Ok(SuspendConductor {
             header_file: None,
@@ -59,21 +62,12 @@ impl SuspendConductor {
         })
     }
 
-    // Public entry point that hibernates the system, and returns either upon
-    // failure to hibernate or after the system has resumed from a successful
-    // hibernation.
+    /// Public entry point that hibernates the system, and returns either upon
+    /// failure to hibernate or after the system has resumed from a successful
+    /// hibernation.
     pub fn hibernate(&mut self, options: HibernateOptions) -> Result<()> {
         info!("Beginning hibernate");
-        if !Path::new(HIBERNATE_DIR).exists() {
-            debug!("Creating hibernate directory");
-            if let Err(e) = create_dir(HIBERNATE_DIR) {
-                return Err(HibernateError::CreateDirectoryError(
-                    HIBERNATE_DIR.to_string(),
-                    e,
-                ));
-            }
-        }
-
+        create_hibernate_dir()?;
         self.header_file = Some(preallocate_header_file()?);
         self.hiber_file = Some(preallocate_hiberfile()?);
         self.meta_file = Some(preallocate_metadata_file()?);
@@ -122,9 +116,9 @@ impl SuspendConductor {
         result
     }
 
-    // Inner helper function to actually take the snapshot, save it to disk, and
-    // shut down. Returns upon a failure to hibernate, or after a successful
-    // hibernation has resumed.
+    /// Inner helper function to actually take the snapshot, save it to disk,
+    /// and shut down. Returns upon a failure to hibernate, or after a
+    /// successful hibernation has resumed.
     fn suspend_system(&mut self) -> Result<()> {
         self.snap_dev = Some(SnapshotDevice::new(false)?);
         info!("Freezing userspace");
@@ -149,9 +143,9 @@ impl SuspendConductor {
         result
     }
 
-    // Snapshot the system, write the result to disk, and power down. Returns
-    // upon failure to hibernate, or after a hibernated system has successfully
-    // resumed.
+    /// Snapshot the system, write the result to disk, and power down. Returns
+    /// upon failure to hibernate, or after a hibernated system has successfully
+    /// resumed.
     fn snapshot_and_save(&mut self) -> Result<()> {
         let block_path = path_to_stateful_block()?;
         let dry_run = self.options.dry_run;
@@ -205,7 +199,7 @@ impl SuspendConductor {
         Ok(())
     }
 
-    // Save the snapshot image to disk.
+    /// Save the snapshot image to disk.
     fn write_image(&mut self) -> Result<()> {
         let snap_dev = self.snap_dev.as_mut().unwrap();
         let image_size = snap_dev.get_image_size()?;
@@ -244,7 +238,7 @@ impl SuspendConductor {
         Ok(())
     }
 
-    // Cleans up the hibernate files, releasing that space back to other usermode apps.
+    /// Clean up the hibernate files, releasing that space back to other usermode apps.
     fn delete_data_if_disk_full(&mut self, fs_stats: libc::statvfs) -> Result<()> {
         let free_percent = fs_stats.f_bfree * 100 / fs_stats.f_blocks;
         if free_percent < LOW_DISK_FREE_THRESHOLD {
@@ -257,6 +251,7 @@ impl SuspendConductor {
         Ok(())
     }
 
+    /// Utility function to get the current stateful file system usage.
     fn get_fs_stats(path: &Path) -> Result<libc::statvfs> {
         let path_str_c = CString::new(path.as_os_str().as_bytes()).unwrap();
         let mut stats: libc::statvfs;

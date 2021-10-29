@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-//! Implement support for allocation large page aligned buffers via the mmap()
+//! Implement support for allocating large page aligned buffers via the mmap()
 //! system call. Loosely adapted from https://github.com/rbranson/rust-mmap, who
 //! got it from the rust standard library before it was removed.
 
@@ -15,6 +15,7 @@ pub struct MmapBuffer {
 }
 
 impl MmapBuffer {
+    /// Mmap() up a new anonymous buffer of at least the given size.
     pub fn new(min_len: usize) -> Result<Self> {
         let page_size = get_page_size();
 
@@ -36,14 +37,18 @@ impl MmapBuffer {
         }
     }
 
-    //pub fn data(&self) -> *mut u8 { self.data }
+    /// Return the effective length of the buffer, which may be more than what
+    /// the caller originally asked for.
     pub fn len(&self) -> usize {
         self.len
     }
+
+    /// Return the buffer contents as an immutable u8 slice.
     pub fn u8_slice(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.data, self.len) }
     }
 
+    /// Return the buffer contents as a mutable u8 slice.
     pub fn u8_slice_mut(&self) -> &mut [u8] {
         unsafe { std::slice::from_raw_parts_mut(self.data, self.len) }
     }

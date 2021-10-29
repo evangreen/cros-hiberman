@@ -16,17 +16,26 @@ use std::fs::File;
 use std::io::{IoSlice, Read, Write};
 use std::path::Path;
 
+/// Define the ramfs location where the hibernate public key is stored.
 static PUBLIC_KEY_DIR: &str = "/run/hibernate/";
+/// Define the name where the hibernate public key is stored.
 static PUBLIC_KEY_NAME: &str = "pubkey";
-// Define the fixed test key seed, used for debugging runs.
+/// Define the fixed test key seed, used when a developer wants to hibernate or
+/// resume now with --test-keys.
 const TEST_KEY_MATERIAL: &[u8; HIBERNATE_META_KEY_SIZE] = b"TestHibernateKeyMaterial12345678";
 
+/// The HibernateKeyManager stores the public and private keypair. The public
+/// side is used to encrypt the hibernate metadata at suspend time. The private
+/// side is used to decrypt that same private metadata. An asymmetric key is
+/// used so that the hibernate image decryption key is not sitting around in
+/// memory during most of boot.
 pub struct HibernateKeyManager {
     private_key: Option<PKey<Private>>,
     public_key: Option<PKey<Public>>,
 }
 
 impl HibernateKeyManager {
+    /// Create a new HibernateKeyManager, with no keys.
     pub fn new() -> Self {
         HibernateKeyManager {
             private_key: None,
@@ -34,7 +43,7 @@ impl HibernateKeyManager {
         }
     }
 
-    // Use the test keys.
+    /// Use the test keys.
     pub fn use_test_keys(&mut self) -> Result<()> {
         warn!("Using test keys: File a bug if you see this in production");
         // Don't clobber already loaded keys.
@@ -46,14 +55,15 @@ impl HibernateKeyManager {
         Ok(())
     }
 
-    // Create the private (and public) key based on secret seed material.
+    /// Create the private (and public) key based on secret seed material.
     pub fn set_private_key(&mut self, key: &[u8]) -> Result<()> {
         let private_key = PKey::private_key_from_raw_bytes(key, Id::X25519).unwrap();
         self.private_key = Some(private_key);
         Ok(())
     }
 
-    // Save the public key in memory so it can be used later by the hibernate service.
+    /// Save the public key to a ramfs file so it can be used later by the
+    /// hibernate service.
     pub fn save_public_key(&self) -> Result<()> {
         if matches!(self.private_key, None) {
             return Err(HibernateError::KeyManagerError(
@@ -104,8 +114,8 @@ impl HibernateKeyManager {
         Ok(())
     }
 
-    // Load the public key that was previously saved by a different instance of
-    // this application calling save_public_key().
+    /// Load the public key from a ramfs file, that was previously saved by a
+    /// different instance of this application calling save_public_key().
     pub fn load_public_key(&mut self) -> Result<()> {
         let key_path = Path::new(PUBLIC_KEY_DIR).join(PUBLIC_KEY_NAME);
         info!("Loading public key from {}", key_path.display());
@@ -140,10 +150,10 @@ impl HibernateKeyManager {
         Ok(())
     }
 
-    // Generate a new metadata key by generating a random ephemeral asymmetric
-    // key and doing Diffie-Hellman to get a symmetric key. The caller must have
-    // previously called load_public_key() or use_test_key(). On success, the
-    // symmetric key will be installed in the given metadata instance.
+    /// Generate a new metadata key by generating a random ephemeral asymmetric
+    /// key and doing Diffie-Hellman to get a symmetric key. The caller must
+    /// have previously called load_public_key() or use_test_key(). On success,
+    /// the symmetric key will be installed in the given metadata instance.
     pub fn install_new_metadata_key(&mut self, metadata: &mut HibernateMetadata) -> Result<()> {
         // Use the public key. The private key will also do.
         let public_key = match &self.public_key {
@@ -168,9 +178,9 @@ impl HibernateKeyManager {
         self.install_derived_key(metadata, &mut deriver)
     }
 
-    // Generate the metadata key by doing Diffie-Hellman with the previously
-    // saved ephemeral public key, and the auth public/private key. The caller
-    // must have previously called set_private_key().
+    /// Generate the metadata key by doing Diffie-Hellman with the previously
+    /// saved ephemeral public key, and the auth public/private key. The caller
+    /// must have previously called set_private_key().
     pub fn install_saved_metadata_key(&mut self, metadata: &mut HibernateMetadata) -> Result<()> {
         if matches!(self.private_key, None) {
             return Err(HibernateError::KeyManagerError(
@@ -189,8 +199,8 @@ impl HibernateKeyManager {
         self.install_derived_key(metadata, &mut deriver)
     }
 
-    // Run a set up deriver to get the shared key, and install it into the
-    // metadata for future encryption or decryption of private data.
+    /// Run a set up deriver to get the shared key, and install it into the
+    /// metadata for future encryption or decryption of private data.
     fn install_derived_key(
         &self,
         metadata: &mut HibernateMetadata,

@@ -10,134 +10,137 @@ use openssl::symm::{Cipher, Crypter, Mode};
 use std::fs::File;
 use std::io::{IoSliceMut, Read, Write};
 
-// Magic value used to recognize a hibernate metadata struct.
+/// Magic value used to recognize a hibernate metadata struct.
 const HIBERNATE_META_MAGIC: u64 = 0x6174654D72626948;
-// Version of the structure contents. Bump this up whenever the
-// structure changes.
+
+/// Version of the structure contents. Bump this up whenever the
+/// structure changes.
 const HIBERNATE_META_VERSION: u32 = 1;
 
 // Define hibernate metadata flags.
-// This flag is set if the hibernate image is valid and ready to be resumed to.
+/// This flag is set if the hibernate image is valid and ready to be resumed to.
 pub const HIBERNATE_META_FLAG_VALID: u32 = 0x00000001;
 
-// This flag is set if the image has already been attempted for resume. When
-// this flag is set the VALID flag is cleared.
+/// This flag is set if the image has already been attempted for resume. When
+/// this flag is set the VALID flag is cleared.
 pub const HIBERNATE_META_FLAG_RESUME_STARTED: u32 = 0x00000002;
 
-// This flag is set if the image was fully loaded and a resume launch was
-// attempted.
+/// This flag is set if the image was fully loaded and a resume launch was
+/// attempted.
 pub const HIBERNATE_META_FLAG_RESUME_LAUNCHED: u32 = 0x00000004;
 
-// This flag is set if the image has already been resumed into, but the resume
-// attempt failed. The RESUMED flag will also be set.
+/// This flag is set if the image has already been resumed into, but the resume
+/// attempt failed. The RESUMED flag will also be set.
 pub const HIBERNATE_META_FLAG_RESUME_FAILED: u32 = 0x00000008;
 
-// This flag is set if the image is encrypted.
+/// This flag is set if the image is encrypted.
 pub const HIBERNATE_META_FLAG_ENCRYPTED: u32 = 0x00000010;
 
-// Define the mask of all valid flags.
+/// Define the mask of all valid flags.
 pub const HIBERNATE_META_VALID_FLAGS: u32 = HIBERNATE_META_FLAG_VALID
     | HIBERNATE_META_FLAG_RESUME_STARTED
     | HIBERNATE_META_FLAG_RESUME_LAUNCHED
     | HIBERNATE_META_FLAG_RESUME_FAILED
     | HIBERNATE_META_FLAG_ENCRYPTED;
 
-// Define the size of the hash field in the metadata.
+/// Define the size of the hash field in the metadata.
 pub const HIBERNATE_HASH_SIZE: usize = 32;
 
-// Define the size of the hibernate data symmetric encryption key.
+/// Define the size of the hibernate data symmetric encryption key.
 pub const HIBERNATE_DATA_KEY_SIZE: usize = 16;
 pub const HIBERNATE_DATA_IV_SIZE: usize = HIBERNATE_DATA_KEY_SIZE;
 
-// Define the size of the encrypted private area. Bump this up (and
-// bump the version) if PrivateHibernateMetadata outgrows it.
+/// Define the size of the encrypted private area. Bump this up (and
+/// bump the version) if PrivateHibernateMetadata outgrows it.
 pub const HIBERNATE_META_PRIVATE_SIZE: usize = 0x400;
 
-// Define the size of the asymmetric keypairs used to encrypt the
-// hibernate metadata.
+/// Define the size of the asymmetric keypairs used to encrypt the
+/// hibernate metadata.
 pub const HIBERNATE_META_KEY_SIZE: usize = 32;
 
-// Define the software representation of the hibernate metadata.
+/// Define the software representation of the hibernate metadata.
 pub struct HibernateMetadata {
-    // The size of the hibernate image data.
+    /// The size of the hibernate image data.
     pub image_size: u64,
-    // Flags. See HIBERNATE_META_FLAG_* definitions.
+    /// Flags. See HIBERNATE_META_FLAG_* definitions.
     pub flags: u32,
-    // Number of pages in the image's header and pagemap.
+    /// Number of pages in the image's header and pagemap.
     pub pagemap_pages: u32,
-    // Hash of the header pages.
+    /// Hash of the header pages.
     pub header_hash: [u8; HIBERNATE_HASH_SIZE],
-    // Hibernate symmetric encryption key.
+    /// Hibernate symmetric encryption key.
     pub data_key: [u8; HIBERNATE_DATA_KEY_SIZE],
-    // Hibernate symmetric encryption IV (chosen randomly).
+    /// Hibernate symmetric encryption IV (chosen randomly).
     pub data_iv: [u8; HIBERNATE_DATA_IV_SIZE],
-    // The first byte of data, in plaintext. This is needed to coerce the kernel
-    // into doing its image allocation. Random IV used for metadata encryption.
+    /// The first byte of data, in plaintext. This is needed to coerce the kernel
+    /// into doing its image allocation. Random IV used for metadata encryption.
     pub first_data_byte: u8,
-    // Public side of the ephemeral keypair used in Diffie-Hellman to derive
-    // the metadata key.
+    /// Public side of the ephemeral keypair used in Diffie-Hellman to derive
+    /// the metadata key.
     pub meta_eph_public: [u8; HIBERNATE_META_KEY_SIZE],
-    // Random IV used for metadata encryption.
+    /// Random IV used for metadata encryption.
     meta_iv: [u8; HIBERNATE_DATA_IV_SIZE],
-    // The not-yet-decrypted private data.
+    /// The not-yet-decrypted private data.
     private_blob: Option<[u8; HIBERNATE_META_PRIVATE_SIZE]>,
-    // The key used to decrypt private metadata.
+    /// The key used to decrypt private metadata.
     meta_key: Option<[u8; HIBERNATE_DATA_KEY_SIZE]>,
-    // Define whether or not to save private data to disk anymore or not. This
-    // can be cleared when the metadata is only being written out as a debugging
-    // breadcrumb.
+    /// Define whether or not to save private data to disk anymore or not. This
+    /// can be cleared when the metadata is only being written out as a debugging
+    /// breadcrumb.
     save_private_data: bool,
 }
 
-// Define the structure of the public hibernate metadata, which is written
-// out to disk unencrypted.
-// Use repr(C) to ensure a consistent structure layout.
+/// Define the structure of the public hibernate metadata, which is written
+/// out to disk unencrypted.
+/// Use repr(C) to ensure a consistent structure layout.
 #[repr(C)]
 pub struct PublicHibernateMetadata {
-    // This must be set to HIBERNATE_META_MAGIC.
+    /// This must be set to HIBERNATE_META_MAGIC.
     magic: u64,
-    // This must be set to HIBERNATE_META_VERSION.
+    /// This must be set to HIBERNATE_META_VERSION.
     version: u32,
-    // Number of pages in the image's header and pagemap.
+    /// Number of pages in the image's header and pagemap.
     pagemap_pages: u32,
-    // The size of the hibernate image data.
+    /// The size of the hibernate image data.
     image_size: u64,
-    // Flags. See HIBERNATE_META_FLAG_* definitions.
+    /// Flags. See HIBERNATE_META_FLAG_* definitions.
     flags: u32,
-    // The first byte of data, needed to coerce the kernel into doing its big
-    // allocation.
+    /// The first byte of data, needed to coerce the kernel into doing its big
+    /// allocation.
     first_data_byte: u8,
-    // Public side of the ephemeral keypair used in Diffie-Hellman to
-    // derive the metadata key.
+    /// Public side of the ephemeral keypair used in Diffie-Hellman to
+    /// derive the metadata key.
     meta_eph_public: [u8; HIBERNATE_META_KEY_SIZE],
-    // IV used for private portion of metadata.
+    /// IV used for private portion of metadata.
     private_iv: [u8; HIBERNATE_DATA_IV_SIZE],
-    // Encrypted portion.
+    /// Encrypted portion.
     private: [u8; HIBERNATE_META_PRIVATE_SIZE],
 }
 
-// Define the structure of the private hibernate metadata, which is written
-// out to disk encrypted.
-// Use repr(C) to ensure a consistent structure layout.
+/// Define the structure of the private hibernate metadata, which is written
+/// out to disk encrypted.
+/// Use repr(C) to ensure a consistent structure layout.
 #[repr(C)]
 pub struct PrivateHibernateMetadata {
-    // This must be set to HIBERNATE_META_VERSION.
+    /// This must be set to HIBERNATE_META_VERSION.
     version: u32,
-    // Number of pages in the image's header and pagemap.
+    /// Number of pages in the image's header and pagemap.
     pagemap_pages: u32,
-    // The size of the hibernate image data.
+    /// The size of the hibernate image data.
     image_size: u64,
-    // Flags. See HIBERNATE_META_FLAG_* definitions.
+    /// Flags. See HIBERNATE_META_FLAG_* definitions.
     flags: u32,
-    // Hibernate symmetric encryption key.
+    /// Hibernate symmetric encryption key.
     data_key: [u8; HIBERNATE_DATA_KEY_SIZE],
-    // Hibernate symmetric encryption IV (chosen randomly).
+    /// Hibernate symmetric encryption IV (chosen randomly).
     data_iv: [u8; HIBERNATE_DATA_IV_SIZE],
-    // Hash of the header pages.
+    /// Hash of the header pages.
     header_hash: [u8; HIBERNATE_HASH_SIZE],
 }
 
 impl HibernateMetadata {
+    /// Create a new metadata structure. The data key, data IV, and metadata IV
+    /// will be initialized with data from /dev/urandom.
     pub fn new() -> Result<Self> {
         let mut urandom = match File::open("/dev/urandom") {
             Ok(f) => f,
@@ -171,7 +174,9 @@ impl HibernateMetadata {
         })
     }
 
-    pub fn load_from_data(pubdata: &PublicHibernateMetadata) -> Result<Self> {
+    /// Create a new metadata object based on the contents of the C structure
+    /// data.
+    fn load_from_data(pubdata: &PublicHibernateMetadata) -> Result<Self> {
         if pubdata.magic != HIBERNATE_META_MAGIC {
             return Err(HibernateError::MetadataError(format!(
                 "Invalid metadata magic: {:x?}, expected {:x?}",
@@ -209,8 +214,8 @@ impl HibernateMetadata {
         })
     }
 
-    // Loads the metadata from disk, and populates the structure based on the
-    // public data. The private data is left in a blob.
+    /// Load the metadata from disk, and populates the structure based on the
+    /// public data. The private data is left in a blob.
     pub fn load_from_disk(disk_file: &mut BouncedDiskFile) -> Result<Self> {
         let mut buf = vec![0u8; 4096];
         let mut slice = [IoSliceMut::new(&mut buf)];
@@ -236,10 +241,13 @@ impl HibernateMetadata {
         Self::load_from_data(&public_data)
     }
 
+    /// Set the key used to encrypt/decrypt the private metadata.
     pub fn set_metadata_key(&mut self, key: [u8; HIBERNATE_DATA_KEY_SIZE]) {
         self.meta_key = Some(key);
     }
 
+    /// Decrypt the private metadata contents via a key set previously by
+    /// set_metadata_key(), and populate it into the current object.
     pub fn load_private_data(&mut self) -> Result<()> {
         if matches!(self.meta_key, None) {
             return Err(HibernateError::MetadataError(
@@ -288,6 +296,8 @@ impl HibernateMetadata {
         self.apply_private_data(&private_data)
     }
 
+    /// Apply private metadata info from a given C struct into the current
+    /// object.
     fn apply_private_data(&mut self, privdata: &PrivateHibernateMetadata) -> Result<()> {
         if privdata.version != HIBERNATE_META_VERSION {
             return Err(HibernateError::MetadataError(format!(
@@ -317,9 +327,10 @@ impl HibernateMetadata {
         Ok(())
     }
 
-    // Save the current metadata contents to disk. If dont_save_private_data()
-    // has been called, then only the public portions are saved, and the private
-    // portions are zeroed.
+    /// Save the current metadata contents to disk. If dont_save_private_data()
+    /// has been called, then only the public portions are saved, and the
+    /// private portion is zeroed out. This is useful on resume when the caller
+    /// wants to update flags and clear the private area.
     pub fn write_to_disk(&self, disk_file: &mut BouncedDiskFile) -> Result<()> {
         let mut buf = vec![0u8; 4096];
 
@@ -362,10 +373,15 @@ impl HibernateMetadata {
         Ok(())
     }
 
+    /// Stop including the private metadata when saving to disk. This is useful
+    /// upon resume when we want to update the flags, but there will be no more
+    /// resume attempts with this image (because the attempt is in progress), so
+    /// the private metadata can be cleared.
     pub fn dont_save_private_data(&mut self) {
         self.save_private_data = false;
     }
 
+    /// Create the public C struct from the current object contents.
     fn build_public_data(&self, include_private: bool) -> Result<PublicHibernateMetadata> {
         let private = match include_private {
             true => self.build_private_buffer()?,
@@ -395,7 +411,7 @@ impl HibernateMetadata {
         })
     }
 
-    // Construct the encrypted private buffer area.
+    /// Construct the encrypted private buffer area.
     fn build_private_buffer(&self) -> Result<[u8; HIBERNATE_META_PRIVATE_SIZE]> {
         let mut buf = [0u8; HIBERNATE_META_PRIVATE_SIZE];
         let private_data = self.build_private_data();
@@ -441,7 +457,7 @@ impl HibernateMetadata {
         Ok(buf)
     }
 
-    // Construct the private metadata C structure contents.
+    /// Construct the private metadata C structure contents.
     fn build_private_data(&self) -> PrivateHibernateMetadata {
         PrivateHibernateMetadata {
             version: HIBERNATE_META_VERSION,
@@ -454,7 +470,7 @@ impl HibernateMetadata {
         }
     }
 
-    // Fill a buffer with random bytes, given an open file to /dev/urandom.
+    /// Fill a buffer with random bytes, given an open file to /dev/urandom.
     fn fill_random(urandom: &mut File, buf: &mut [u8]) -> Result<()> {
         let length = buf.len();
         let mut slice = [IoSliceMut::new(buf)];

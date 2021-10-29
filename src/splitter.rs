@@ -25,11 +25,11 @@ use openssl::hash::{Hasher, MessageDigest};
 use std::convert::TryInto;
 use std::io::{Error as IoError, ErrorKind, Read, Write};
 
-// A machine with 32GB RAM has 8M PFNs. Half of that times 8 bytes per PFN is
-// 32MB.
+/// A machine with 32GB RAM has 8M PFNs. Half of that times 8 bytes per PFN is
+/// 32MB.
 pub const HIBER_HEADER_MAX_SIZE: i64 = (1024 * 1024 * 32) + 4096;
 
-// Kernel definitions embedded in swsusp_info.
+/// Kernel definitions embedded in swsusp_info.
 const NEW_UTS_LEN: usize = 64;
 
 #[repr(C)]
@@ -42,8 +42,8 @@ struct NewUtsName {
     domainname: [u8; NEW_UTS_LEN + 1],
 }
 
-// Define the swsusp_info header created by the kernel at the start of each
-// hibernate image. Use this to figure out how many header pages there are.
+/// Define the swsusp_info header created by the kernel at the start of each
+/// hibernate image. Use this to figure out how many header pages there are.
 #[repr(C)]
 struct SwSuspInfo {
     uts: NewUtsName,
@@ -55,8 +55,8 @@ struct SwSuspInfo {
     size: usize,
 }
 
-// An image splitter is a generic object that implements the Write trait. It
-// will divert writes first into the header file, and then the data file.
+/// An image splitter is a generic object that implements the Write trait. It
+/// will divert writes first into the header file, and then the data file.
 pub struct ImageSplitter<'a> {
     header_file: &'a mut dyn Write,
     data_file: &'a mut dyn Write,
@@ -67,7 +67,14 @@ pub struct ImageSplitter<'a> {
     hasher: Hasher,
 }
 
+/// The ImageSplitter routes an initial set of writes to a header file, then
+/// routes the main data to the data file. It uses the first sector's write to
+/// determine where to make the split. It also computes the hash of the header
+/// portion as it goes by, and saves that hash into the metadata.
 impl<'a> ImageSplitter<'a> {
+    /// Create a new image splitter, given pointers to the header destination
+    /// and data file destination. The metadata is also received as a place to
+    /// store the header hash.
     pub fn new(
         header_file: &'a mut dyn Write,
         data_file: &'a mut dyn Write,
@@ -84,9 +91,9 @@ impl<'a> ImageSplitter<'a> {
         }
     }
 
-    // Helper function to write contents to the header file, snarfing out the
-    // header data size on the way down. Any remainder is passed to the data
-    // file.
+    /// Helper function to write contents to the header file, snarfing out the
+    /// header data size on the way down. Any remainder is passed to the data
+    /// file.
     fn write_header(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let page_size = self.page_size;
         let length = buf.len();
@@ -177,8 +184,8 @@ impl Write for ImageSplitter<'_> {
     }
 }
 
-// An ImageJoiner is the opposite of an ImageSplitter. It implements Read,
-// stitching together the header contents followed by the data contents.
+/// An ImageJoiner is the opposite of an ImageSplitter. It implements Read,
+/// stitching together the header contents followed by the data contents.
 pub struct ImageJoiner<'a> {
     header_file: &'a mut dyn Read,
     data_file: &'a mut dyn Read,
@@ -190,6 +197,8 @@ pub struct ImageJoiner<'a> {
 }
 
 impl<'a> ImageJoiner<'a> {
+    /// Create a new ImageJoiner, a single object implementing the Read trait
+    /// that will stitch together the header, followed by the data portion.
     pub fn new(header_file: &'a mut dyn Read, data_file: &'a mut dyn Read) -> ImageJoiner<'a> {
         Self {
             header_file,
@@ -202,6 +211,9 @@ impl<'a> ImageJoiner<'a> {
         }
     }
 
+    /// Returns the computed hash of the header region, which the caller will
+    /// compare to what's in the private metadata (once that's decrypted and
+    /// available).
     pub fn get_header_hash(&self, hash: &mut [u8; HIBERNATE_HASH_SIZE]) -> usize {
         if self.header_hash.len() != HIBERNATE_HASH_SIZE {
             return 0;
@@ -211,9 +223,9 @@ impl<'a> ImageJoiner<'a> {
         return self.meta_pages;
     }
 
-    // Helper function to read contents from the header file, snarfing out the
-    // header data size on the way. Any remaining reads are fed from the data
-    // file.
+    /// Helper function to read contents from the header file, snarfing out the
+    /// header data size on the way. Any remaining reads are fed from the data
+    /// file.
     fn read_header(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let page_size = self.page_size;
         let mut offset = 0usize;
@@ -285,8 +297,8 @@ impl Read for ImageJoiner<'_> {
     }
 }
 
-// Reads the header out of the first page of the hibernate image. Returns the
-// number of metadata pages on success.
+/// Read the header out of the first page of the hibernate image. Returns the
+/// number of metadata pages on success.
 fn read_header_page(buf: &[u8], page_size: usize) -> std::io::Result<usize> {
     assert!(buf.len() >= page_size);
 

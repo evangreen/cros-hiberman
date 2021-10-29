@@ -11,14 +11,16 @@ use std::io::{Read, Seek, SeekFrom, Write};
 
 const SWAPPINESS_PATH: &str = "/proc/sys/vm/swappiness";
 
+/// This simple object remembers the original value of the swappiness file, so
+/// that upon being dropped it can be restored.
 pub struct Swappiness {
     file: File,
     swappiness: i32,
 }
 
 impl Swappiness {
-    // Create a new Swappiness object, which reads and saves the original value.
-    // When this object is dropped, the value read here will be restored.
+    /// Create a new Swappiness object, which reads and saves the original value.
+    /// When this object is dropped, the value read here will be restored.
     pub fn new() -> Result<Self> {
         let mut file = match OpenOptions::new()
             .read(true)
@@ -39,6 +41,7 @@ impl Swappiness {
         Ok(Self { file, swappiness })
     }
 
+    /// Set the current swappiness value.
     pub fn set_swappiness(&mut self, value: i32) -> Result<()> {
         if let Err(e) = self.file.seek(SeekFrom::Start(0)) {
             return Err(HibernateError::FileIoError("Failed to seek".to_string(), e));
@@ -53,6 +56,7 @@ impl Swappiness {
         }
     }
 
+    /// Internal helper function to read the current swappiness value.
     fn read_swappiness(file: &mut File) -> Result<i32> {
         let mut s = String::with_capacity(10);
         if let Err(e) = file.seek(SeekFrom::Start(0)) {

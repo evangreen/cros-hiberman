@@ -15,11 +15,14 @@ use std::collections::LinkedList;
 use std::convert::TryInto;
 use std::io::{Error as IoError, ErrorKind, IoSliceMut, Read};
 
-// Allocate buffers in chunks to keep things large but manageable.
+/// Allocate buffers in chunks to keep things large but manageable.
 const PRELOADER_CHUNK_SIZE: usize = 1024 * 1024 * 2;
-// The minimum percent of memory to keep free.
+/// The minimum percent of memory to keep free.
 const RESERVE_MEMORY_PERCENT: usize = 6;
 
+/// The ImagePreloader can read data from a source file and hold it in a linked
+/// list of buffers. It then implements the Read trait, which drains those
+/// buffers.
 pub struct ImagePreloader<'a> {
     source: &'a mut dyn Read,
     chunks: LinkedList<ImageChunk>,
@@ -29,6 +32,8 @@ pub struct ImagePreloader<'a> {
 }
 
 impl<'a> ImagePreloader<'a> {
+    /// Create a new preloader, with a given total image size, and no buffers
+    /// initially.
     pub fn new(source: &'a mut dyn Read, total_size: u64) -> Self {
         Self {
             source,
@@ -41,8 +46,9 @@ impl<'a> ImagePreloader<'a> {
         }
     }
 
-    // Allocate a new chunk, and fill it with source file material. On success,
-    // returns a boolean indicating if all chunks have been read.
+    /// Allocate a new chunk, and fill it with source file material. On success,
+    /// returns a boolean indicating if all chunks have been read. The chunk
+    /// size is currently hardcoded.
     pub fn load_chunk(&mut self) -> Result<bool> {
         if self.size_loaded >= self.total_size {
             return Ok(true);
@@ -63,7 +69,7 @@ impl<'a> ImagePreloader<'a> {
         Ok(self.size_loaded >= self.total_size)
     }
 
-    // Load as many image chunks as possible without exhausting system memory.
+    /// Load as many image chunks as possible without exhausting system memory.
     pub fn load_into_available_memory(&mut self) -> Result<()> {
         let total_pages = get_total_memory_pages();
         let minimum_pages = total_pages * RESERVE_MEMORY_PERCENT / 100;
@@ -158,12 +164,15 @@ impl Read for ImagePreloader<'_> {
     }
 }
 
+/// Internal structure storing an individual buffer of the ImagePreloader.
 struct ImageChunk {
     pub buffer: MmapBuffer,
     pub size: usize,
 }
 
 impl ImageChunk {
+    /// Create and initialize from the given source a new buffer of the
+    /// specified size.
     pub fn new(source: &mut dyn Read, size: usize) -> Result<Self> {
         let buffer = MmapBuffer::new(size)?;
         let buffer_slice = buffer.u8_slice_mut();

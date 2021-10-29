@@ -15,12 +15,13 @@ use std::time::Instant;
 use sync::Mutex;
 pub use sys_util::syslog::{Facility, Priority};
 
-// Define the mount location where the hibernate data is located.
-pub const KMSG_PATH: &str = "/dev/kmsg";
-// Define the prefix to go on log messages.
-pub const LOG_PREFIX: &str = "hiberman";
-// Define the default flush threshold. This must be a power of two.
-pub const FLUSH_THRESHOLD: usize = 4096;
+/// Define the path to kmsg, used to send log lines into the kernel buffer in
+/// case a crash occurs.
+const KMSG_PATH: &str = "/dev/kmsg";
+/// Define the prefix to go on log messages.
+const LOG_PREFIX: &str = "hiberman";
+/// Define the default flush threshold. This must be a power of two.
+const FLUSH_THRESHOLD: usize = 4096;
 
 // Copied from sys_util/src/syslog.rs.
 // TODO: Figure out how to modify sys_util so that we can just implement a backend here.
@@ -115,12 +116,17 @@ macro_rules! debug {
     ($($args:tt)+) => ($crate::log!($crate::hiberlog::Priority::Debug, $($args)*))
 }
 
+/// Define the possibilites as to where to route log lines to.
 pub enum HiberlogOut {
+    /// Don't push log lines anywhere for now, just keep them in memory.
     BufferInMemory,
+    /// Push log lines to the syslogger.
     Syslog,
+    /// Push log lines to a DiskFile.
     File,
 }
 
+/// Define the hibernate logger state.
 struct Hiberlog {
     file: Option<Box<dyn Write>>,
     kmsg: File,
@@ -155,6 +161,7 @@ impl Hiberlog {
         })
     }
 
+    /// Log a message.
     pub fn log(
         &mut self,
         pri: Priority,
@@ -205,6 +212,8 @@ impl Hiberlog {
         }
     }
 
+    /// Helper function to flush one page's worth of buffered log lines to a
+    /// file destination.
     fn flush_one_page(&mut self) {
         // Do nothing if buffering messages in memory.
         if matches!(self.out, HiberlogOut::BufferInMemory) {
@@ -256,6 +265,7 @@ impl Hiberlog {
         self.partial = partial;
     }
 
+    /// Flush all complete pages of log lines.
     fn flush_full_pages(&mut self) {
         // Do nothing if buffering messages in memory.
         if matches!(self.out, HiberlogOut::BufferInMemory) {
@@ -267,6 +277,9 @@ impl Hiberlog {
         }
     }
 
+    /// Flush and finalize the log file. This is used to terminate the logs
+    /// written to a file, to make sure that they are all written out, and that
+    /// when retrieved later the end of the log is known.
     pub fn flush(&mut self) {
         // Do a regular full-page flush, which will be perfectly page aligned.
         self.flush_full_pages();
@@ -278,7 +291,7 @@ impl Hiberlog {
         self.flush_one_page();
     }
 
-    // Push any pending lines to the syslog.
+    /// Push any pending lines to the syslog.
     pub fn flush_to_syslog(&mut self) {
         // Ignore the partial line, just replay pending lines.
         for line_vec in &self.pending {
@@ -297,6 +310,12 @@ impl Hiberlog {
 
         self.reset();
     }
+
+    /// Empty the pending log buffer, discarding any unwritten messages. This is
+    /// used after a successful resume to avoid replaying what look like
+    /// unflushed logs from when the snapshot was taken. In reality these logs
+    /// got flushed after the snapshot was taken, just before the machine shut
+    /// down.
     pub fn reset(&mut self) {
         self.pending_size = 0;
         self.pending = vec![];
@@ -309,8 +328,9 @@ pub fn log(pri: Priority, fac: Facility, file_line: Option<(&str, u32)>, args: f
     state.log(pri, fac, file_line, args)
 }
 
-// Diverts the log to a new output. This does not flush or reset the stream, the caller must
-// decide what they want to do with buffered output before calling this.
+/// Divert the log to a new output. This does not flush or reset the stream, the
+/// caller must decide what they want to do with buffered output before calling
+/// this.
 pub fn redirect_log(out: HiberlogOut, file: Option<Box<dyn Write>>) {
     let mut state = lock!();
     state.file = file;
@@ -330,18 +350,21 @@ pub fn redirect_log(out: HiberlogOut, file: Option<Box<dyn Write>>) {
     }
 }
 
-// Discard any buffered but unsent logging data.
+/// Discard any buffered but unsent logging data.
 pub fn reset_log() {
     let mut state = lock!();
     state.reset();
 }
 
-// Flush any pending messages out to the file, and add a terminator.
+/// Flush any pending messages out to the file, and add a terminator.
 pub fn flush_log() {
     let mut state = lock!();
     state.flush();
 }
 
+/// Write a newline to the beginning of the given log file so that future
+/// attempts to replay that log will see it as empty. This doesn't securely
+/// shred the log data.
 pub fn clear_log_file(file: &mut BouncedDiskFile) -> Result<()> {
     let mut buf = [0u8; FLUSH_THRESHOLD];
     buf[0] = '\n' as u8;
@@ -356,6 +379,7 @@ pub fn clear_log_file(file: &mut BouncedDiskFile) -> Result<()> {
     Ok(())
 }
 
+/// Replay the suspend (and maybe resume) logs to the syslogger.
 pub fn replay_logs(push_resume_logs: bool, clear: bool) {
     // Push the hibernate logs that were taken after the snapshot (and
     // therefore after syslog became frozen) back into the syslog now.
@@ -370,6 +394,8 @@ pub fn replay_logs(push_resume_logs: bool, clear: bool) {
     }
 }
 
+/// Helper function to replay the suspend or resume log to the syslogger, and
+/// potentially zero out the log as well.
 fn replay_log(suspend_log: bool, clear: bool) {
     let name = match suspend_log {
         true => "suspend log",
@@ -392,10 +418,10 @@ fn replay_log(suspend_log: bool, clear: bool) {
     }
 }
 
-// Replay a log file to syslog.
+/// Replay a generic log file to the syslogger..
 fn replay_log_file(file: &mut dyn Read, name: &str) {
-    // Read the file until the first null byte is found, which
-    // signifies the end of the log.
+    // Read the file until the first null byte is found, which signifies the end
+    // of the log.
     let mut reader = BufReader::new(file);
     let mut buf = Vec::<u8>::new();
     if let Err(e) = reader.read_until(0, &mut buf) {
@@ -430,6 +456,7 @@ fn replay_log_file(file: &mut dyn Read, name: &str) {
     );
 }
 
+/// Replay a single log line to the syslogger.
 fn replay_line(line: String) {
     // The log lines are in kmsg format, like:
     // <11>hiberman: [src/hiberman.rs:529] Hello 2004
