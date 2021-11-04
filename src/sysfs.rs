@@ -22,19 +22,11 @@ impl Swappiness {
     /// Create a new Swappiness object, which reads and saves the original value.
     /// When this object is dropped, the value read here will be restored.
     pub fn new() -> Result<Self> {
-        let mut file = match OpenOptions::new()
+        let mut file = OpenOptions::new()
             .read(true)
             .write(true)
             .open(SWAPPINESS_PATH)
-        {
-            Ok(f) => f,
-            Err(e) => {
-                return Err(HibernateError::OpenFileError(
-                    SWAPPINESS_PATH.to_string(),
-                    e,
-                ))
-            }
-        };
+            .map_err(|e| HibernateError::OpenFileError(SWAPPINESS_PATH.to_string(), e))?;
 
         let swappiness = Self::read_swappiness(&mut file)?;
         debug!("Saved original swappiness: {}", swappiness);

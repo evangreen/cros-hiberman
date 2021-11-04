@@ -92,11 +92,7 @@ pub fn preallocate_hiberfile() -> Result<DiskFile> {
 /// Open a pre-existing disk file with bounce buffer,
 /// still with read and write permissions.
 pub fn open_bounced_disk_file(path: &Path) -> Result<BouncedDiskFile> {
-    let mut file = match OpenOptions::new().read(true).write(true).open(path) {
-        Ok(f) => f,
-        Err(e) => return Err(HibernateError::OpenFileError(path.display().to_string(), e)),
-    };
-
+    let mut file = OpenOptions::new().read(true).write(true).open(path).map_err(|e| HibernateError::OpenFileError(path.display().to_string(), e))?;
     BouncedDiskFile::new(&mut file, None)
 }
 
@@ -147,15 +143,12 @@ fn get_total_memory_mb() -> u32 {
 /// Helper function used to preallocate space on a file using the fallocate() C
 /// library call.
 fn preallocate_file(path: &Path, size: i64) -> Result<File> {
-    let file = match OpenOptions::new()
+    let file = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .open(path)
-    {
-        Ok(f) => f,
-        Err(e) => return Err(HibernateError::OpenFileError(path.display().to_string(), e)),
-    };
+        .map_err(|e| HibernateError::OpenFileError(path.display().to_string(), e))?;
 
     let rc = unsafe { libc::fallocate(file.as_raw_fd(), 0, 0, size) as isize };
 
@@ -168,10 +161,6 @@ fn preallocate_file(path: &Path, size: i64) -> Result<File> {
 
 /// Open a pre-existing disk file, still with read and write permissions.
 fn open_disk_file(path: &Path) -> Result<DiskFile> {
-    let mut file = match OpenOptions::new().read(true).write(true).open(path) {
-        Ok(f) => f,
-        Err(e) => return Err(HibernateError::OpenFileError(path.display().to_string(), e)),
-    };
-
+    let mut file = OpenOptions::new().read(true).write(true).open(path).map_err(|e| HibernateError::OpenFileError(path.display().to_string(), e))?;
     DiskFile::new(&mut file, None)
 }

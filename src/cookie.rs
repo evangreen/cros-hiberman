@@ -60,15 +60,12 @@ impl HibernateCookie {
     /// Create a new HibernateCookie structure. This allocates resources but
     /// does not attempt to read or write the disk.
     pub fn new(path: &Path) -> Result<HibernateCookie> {
-        let blockdev = match OpenOptions::new()
+        let blockdev = OpenOptions::new()
             .read(true)
             .write(true)
             .custom_flags(libc::O_DIRECT | libc::O_SYNC)
             .open(path)
-        {
-            Ok(f) => f,
-            Err(e) => return Err(HibernateError::OpenFileError(path.display().to_string(), e)),
-        };
+            .map_err(|e| HibernateError::OpenFileError(path.display().to_string(), e))?;
 
         let buffer = MmapBuffer::new(HIBERNATE_COOKIE_READ_SIZE)?;
         Ok(HibernateCookie { blockdev, buffer })

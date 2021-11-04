@@ -145,15 +145,12 @@ impl DiskFile {
             None => {
                 let blockdev_path = path_to_stateful_part()?;
                 debug!("Found hibernate block device: {}", blockdev_path);
-                blockdev = match OpenOptions::new()
+                blockdev = OpenOptions::new()
                     .read(true)
                     .write(true)
                     .custom_flags(libc::O_DIRECT)
                     .open(&blockdev_path)
-                {
-                    Ok(f) => f,
-                    Err(e) => return Err(HibernateError::OpenFileError(blockdev_path, e)),
-                };
+                    .map_err(|e| HibernateError::OpenFileError(blockdev_path, e))?;
             }
             Some(f) => {
                 blockdev = f;

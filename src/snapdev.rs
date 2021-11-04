@@ -38,11 +38,7 @@ impl SnapshotDevice {
             )));
         }
 
-        let snapshot_meta = match metadata(SNAPSHOT_PATH) {
-            Ok(f) => f,
-            Err(e) => return Err(HibernateError::OpenFileError(SNAPSHOT_PATH.to_string(), e)),
-        };
-
+        let snapshot_meta = metadata(SNAPSHOT_PATH).map_err(|e| HibernateError::OpenFileError(SNAPSHOT_PATH.to_string(), e))?;
         if !snapshot_meta.file_type().is_char_device() {
             return Err(HibernateError::SnapshotError(format!(
                 "Snapshot device {} is not a character device",
@@ -50,14 +46,11 @@ impl SnapshotDevice {
             )));
         }
 
-        let file = match OpenOptions::new()
+        let file = OpenOptions::new()
             .read(!open_for_write)
             .write(open_for_write)
             .open(SNAPSHOT_PATH)
-        {
-            Ok(f) => f,
-            Err(e) => return Err(HibernateError::OpenFileError(SNAPSHOT_PATH.to_string(), e)),
-        };
+            .map_err(|e| HibernateError::OpenFileError(SNAPSHOT_PATH.to_string(), e))?;
 
         Ok(SnapshotDevice { file })
     }

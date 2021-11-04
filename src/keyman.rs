@@ -80,16 +80,7 @@ impl HibernateKeyManager {
 
         let key_path = Path::new(PUBLIC_KEY_DIR).join(PUBLIC_KEY_NAME);
         info!("Saving public key to {}", key_path.display());
-        let mut key_file = match File::create(&key_path) {
-            Ok(f) => f,
-            Err(e) => {
-                return Err(HibernateError::OpenFileError(
-                    key_path.display().to_string(),
-                    e,
-                ))
-            }
-        };
-
+        let mut key_file = File::create(&key_path).map_err(|e| HibernateError::OpenFileError(key_path.display().to_string(), e))?;
         let public_key = &self.private_key.as_ref().unwrap().raw_public_key().unwrap();
 
         assert!(public_key.len() == HIBERNATE_META_KEY_SIZE);

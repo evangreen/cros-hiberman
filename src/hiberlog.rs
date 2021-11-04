@@ -142,11 +142,7 @@ struct Hiberlog {
 
 impl Hiberlog {
     pub fn new() -> Result<Self> {
-        let kmsg = match OpenOptions::new().read(true).write(true).open(KMSG_PATH) {
-            Ok(f) => f,
-            Err(e) => return Err(HibernateError::OpenFileError(KMSG_PATH.to_string(), e)),
-        };
-
+        let kmsg = OpenOptions::new().read(true).write(true).open(KMSG_PATH).map_err(|e| HibernateError::OpenFileError(KMSG_PATH.to_string(), e))?;
         Ok(Hiberlog {
             file: None,
             kmsg,
