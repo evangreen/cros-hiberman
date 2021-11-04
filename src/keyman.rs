@@ -5,16 +5,16 @@
 //! Implement key management of the top level asymmetric key pair, used to
 //! protect the hibernate metadata encryption key.
 
-use crate::hibermeta::{HibernateMetadata, HIBERNATE_DATA_KEY_SIZE, HIBERNATE_META_KEY_SIZE};
-use crate::hiberutil::{HibernateError, Result};
-use crate::{error, info, warn};
-use openssl::derive::Deriver;
-use openssl::pkey::{Id, PKey, Private, Public};
 use std::convert::TryInto;
 use std::fs::create_dir;
 use std::fs::File;
 use std::io::{IoSlice, Read, Write};
 use std::path::Path;
+use openssl::derive::Deriver;
+use openssl::pkey::{Id, PKey, Private, Public};
+use crate::hibermeta::{HibernateMetadata, HIBERNATE_DATA_KEY_SIZE, HIBERNATE_META_KEY_SIZE};
+use crate::hiberutil::{HibernateError, Result};
+use crate::{error, info, warn};
 
 /// Define the ramfs location where the hibernate public key is stored.
 static PUBLIC_KEY_DIR: &str = "/run/hibernate/";

@@ -4,13 +4,13 @@
 
 //! High level support for creating and opening the files used by hibernate.
 
+use std::fs::{create_dir, File, OpenOptions};
+use std::os::unix::io::AsRawFd;
+use std::path::Path;
 use crate::diskfile::{BouncedDiskFile, DiskFile};
 use crate::hiberutil::{get_page_size, get_total_memory_pages, HibernateError, Result};
 use crate::splitter::HIBER_HEADER_MAX_SIZE;
 use crate::{debug, info};
-use std::fs::{create_dir, File, OpenOptions};
-use std::os::unix::io::AsRawFd;
-use std::path::Path;
 
 /// Define the directory where hibernate state files are kept.
 pub const HIBERNATE_DIR: &str = "/mnt/stateful_partition/unencrypted/hibernate";

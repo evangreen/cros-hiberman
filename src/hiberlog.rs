@@ -3,9 +3,6 @@
 // found in the LICENSE file.
 
 //! Implement consistent logging across the hibernate and resume transition.
-use crate::diskfile::BouncedDiskFile;
-use crate::files::open_log_file;
-use crate::hiberutil::{HibernateError, Result};
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Cursor, Read, Write};
@@ -14,6 +11,9 @@ use std::sync::{MutexGuard, Once};
 use std::time::Instant;
 use sync::Mutex;
 pub use sys_util::syslog::{Facility, Priority};
+use crate::diskfile::BouncedDiskFile;
+use crate::files::open_log_file;
+use crate::hiberutil::{HibernateError, Result};
 
 /// Define the path to kmsg, used to send log lines into the kernel buffer in
 /// case a crash occurs.

@@ -4,12 +4,12 @@
 
 //! Manages the "valid resume image" cookie.
 
-use crate::hiberutil::{path_to_stateful_block, HibernateError, Result};
-use crate::mmapbuf::MmapBuffer;
 use std::fs::{File, OpenOptions};
 use std::io::{IoSlice, IoSliceMut, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
+use crate::hiberutil::{path_to_stateful_block, HibernateError, Result};
+use crate::mmapbuf::MmapBuffer;
 
 /// The hibernate cookie is a flag stored at a known location on disk. The early
 /// init scripts use this flag to determine whether or not to mount the stateful

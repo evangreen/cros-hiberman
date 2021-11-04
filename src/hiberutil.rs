@@ -4,9 +4,9 @@
 
 //! Implement common functions and definitions used throughout the app and library.
 
-use crate::{error, warn};
 use std::process::Command;
 use thiserror::Error as ThisError;
+use crate::{error, warn};
 
 /// Define the number of pages in a larger chunk used to read and write the
 /// hibernate data file.

@@ -4,12 +4,12 @@
 
 //! Implement snapshot device functionality.
 
-use crate::hiberutil::{HibernateError, Result};
-use libc::{self, c_int, c_ulong, c_void, loff_t};
 use std::fs::{metadata, File, OpenOptions};
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
+use libc::{self, c_int, c_ulong, c_void, loff_t};
+use crate::hiberutil::{HibernateError, Result};
 
 const SNAPSHOT_PATH: &str = "/dev/snapshot";
 

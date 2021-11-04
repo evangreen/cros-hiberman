@@ -4,6 +4,7 @@
 
 //! Implement hibernate resume functionality
 
+use std::io::{Read, Write};
 use crate::cookie::set_hibernate_cookie;
 use crate::crypto::CryptoReader;
 use crate::dbus::HiberDbusConnection;
@@ -26,7 +27,6 @@ use crate::preloader::ImagePreloader;
 use crate::snapdev::SnapshotDevice;
 use crate::splitter::ImageJoiner;
 use crate::{debug, error, info, warn};
-use std::io::{Read, Write};
 
 /// The ResumeConductor orchestrates the various individual instruments that
 /// work in concert to resume the system from hibernation.

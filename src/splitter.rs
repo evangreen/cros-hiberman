@@ -18,12 +18,12 @@
 //! essentially just a page list. The kernel validates its contents, and we also
 //! verify its hash to detect tampering.
 
+use std::convert::TryInto;
+use std::io::{Error as IoError, ErrorKind, Read, Write};
+use openssl::hash::{Hasher, MessageDigest};
 use crate::debug;
 use crate::hibermeta::{HibernateMetadata, HIBERNATE_HASH_SIZE};
 use crate::hiberutil::get_page_size;
-use openssl::hash::{Hasher, MessageDigest};
-use std::convert::TryInto;
-use std::io::{Error as IoError, ErrorKind, Read, Write};
 
 /// A machine with 32GB RAM has 8M PFNs. Half of that times 8 bytes per PFN is
 /// 32MB.

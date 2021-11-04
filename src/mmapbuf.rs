@@ -6,8 +6,8 @@
 //! system call. Loosely adapted from https://github.com/rbranson/rust-mmap, who
 //! got it from the rust standard library before it was removed.
 
-use crate::hiberutil::{get_page_size, HibernateError, Result};
 use libc::c_void;
+use crate::hiberutil::{get_page_size, HibernateError, Result};
 
 pub struct MmapBuffer {
     data: *mut u8,

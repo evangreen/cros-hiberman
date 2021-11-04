@@ -4,13 +4,13 @@
 
 //! Implement support for accessing file contents directly via the underlying block device.
 
+use std::fs::{File, OpenOptions};
+use std::io::{Error as IoError, ErrorKind, IoSlice, IoSliceMut, Read, Seek, SeekFrom, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use crate::fiemap::{Fiemap, FiemapExtent};
 use crate::hiberutil::{get_page_size, path_to_stateful_part, HibernateError, Result};
 use crate::mmapbuf::MmapBuffer;
 use crate::{debug, error};
-use std::fs::{File, OpenOptions};
-use std::io::{Error as IoError, ErrorKind, IoSlice, IoSliceMut, Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::OpenOptionsExt;
 
 /// The BouncedDiskFile is a convencience wrapper around the DiskFile structure.
 /// It uses an internal buffer to avoid the stricter buffer alignment

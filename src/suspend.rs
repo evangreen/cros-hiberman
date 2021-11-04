@@ -4,6 +4,10 @@
 
 //! Implement hibernate suspend functionality
 
+use std::ffi::CString;
+use std::io::Write;
+use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
 use crate::cookie::set_hibernate_cookie;
 use crate::crypto::CryptoWriter;
 use crate::diskfile::{BouncedDiskFile, DiskFile};
@@ -26,10 +30,6 @@ use crate::snapdev::SnapshotDevice;
 use crate::splitter::ImageSplitter;
 use crate::sysfs::Swappiness;
 use crate::{debug, error, info, warn};
-use std::ffi::CString;
-use std::io::Write;
-use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
 
 /// Define the swappiness value we'll set during hibernation.
 const SUSPEND_SWAPPINESS: i32 = 100;

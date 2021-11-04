@@ -4,11 +4,11 @@
 
 //! Implement support for managing hibernate metadata.
 
-use crate::diskfile::BouncedDiskFile;
-use crate::hiberutil::{any_as_u8_slice, HibernateError, Result};
-use openssl::symm::{Cipher, Crypter, Mode};
 use std::fs::File;
 use std::io::{IoSliceMut, Read, Write};
+use openssl::symm::{Cipher, Crypter, Mode};
+use crate::diskfile::BouncedDiskFile;
+use crate::hiberutil::{any_as_u8_slice, HibernateError, Result};
 
 /// Magic value used to recognize a hibernate metadata struct.
 const HIBERNATE_META_MAGIC: u64 = 0x6174654D72626948;

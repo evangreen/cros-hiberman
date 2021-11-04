@@ -4,10 +4,10 @@
 
 //! Implement sysfs save/restore functionality.
 
-use crate::hiberutil::{HibernateError, Result};
-use crate::{debug, warn};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
+use crate::hiberutil::{HibernateError, Result};
+use crate::{debug, warn};
 
 const SWAPPINESS_PATH: &str = "/proc/sys/vm/swappiness";
 

@@ -6,12 +6,12 @@
 
 pub mod cat;
 pub mod cookie;
+pub mod hiberlog;
 mod crypto;
 mod dbus;
 mod diskfile;
 mod fiemap;
 mod files;
-pub mod hiberlog;
 mod hibermeta;
 mod hiberutil;
 mod imagemover;
@@ -24,8 +24,8 @@ mod splitter;
 mod suspend;
 mod sysfs;
 
-use hiberutil::Result;
 pub use hiberutil::{HibernateOptions, ResumeOptions};
+use hiberutil::Result;
 use resume::ResumeConductor;
 use suspend::SuspendConductor;
 

@@ -6,14 +6,14 @@
 //! This is used to frontload potentially slow disk operations while we're stuck
 //! waiting for user input anyway, but not yet capable of decrypting.
 
+use std::collections::LinkedList;
+use std::convert::TryInto;
+use std::io::{Error as IoError, ErrorKind, IoSliceMut, Read};
 use crate::hiberutil::{
     get_available_pages, get_page_size, get_total_memory_pages, HibernateError, Result,
 };
 use crate::mmapbuf::MmapBuffer;
 use crate::{debug, info, warn};
-use std::collections::LinkedList;
-use std::convert::TryInto;
-use std::io::{Error as IoError, ErrorKind, IoSliceMut, Read};
 
 /// Allocate buffers in chunks to keep things large but manageable.
 const PRELOADER_CHUNK_SIZE: usize = 1024 * 1024 * 2;

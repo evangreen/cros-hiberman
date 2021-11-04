@@ -4,11 +4,11 @@
 
 //! Implement the cat debug command
 
+use std::io::{BufRead, BufReader, Read, Write};
+use std::path::Path;
 use crate::files::open_bounced_disk_file;
 use crate::hiberutil::{HibernateError, Result};
 use crate::warn;
-use std::io::{BufRead, BufReader, Read, Write};
-use std::path::Path;
 
 /// Entry point to the `cat` command, which can lift DiskFile content out into
 /// the file system. Disk file content is not accessible via normal file system
