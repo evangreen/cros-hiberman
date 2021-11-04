@@ -74,6 +74,9 @@ pub enum HibernateError {
     /// I/O size error
     #[error("I/O size error: {0}")]
     IoSizeError(String),
+    /// Urandom error.
+    #[error("urandom error: {0}")]
+    RandomError(sys_util::Error),
     /// Failed to find the stateful mount.
     #[error("Failed to find the stateful mount: {0}")]
     RootdevError(String),

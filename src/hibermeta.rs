@@ -4,9 +4,9 @@
 
 //! Implement support for managing hibernate metadata.
 
-use std::fs::File;
 use std::io::{IoSliceMut, Read, Write};
 use openssl::symm::{Cipher, Crypter, Mode};
+use sys_util::rand::{rand_bytes, Source};
 use crate::diskfile::BouncedDiskFile;
 use crate::hiberutil::{any_as_u8_slice, HibernateError, Result};
 
@@ -142,22 +142,17 @@ impl HibernateMetadata {
     /// Create a new metadata structure. The data key, data IV, and metadata IV
     /// will be initialized with data from /dev/urandom.
     pub fn new() -> Result<Self> {
-        let mut urandom = match File::open("/dev/urandom") {
-            Ok(f) => f,
-            Err(e) => return Err(HibernateError::OpenFileError("/dev/urandom".to_string(), e)),
-        };
-
         let mut data_key = [0u8; HIBERNATE_DATA_KEY_SIZE];
-        Self::fill_random(&mut urandom, &mut data_key)?;
+        Self::fill_random(&mut data_key)?;
         let mut data_iv = [0u8; HIBERNATE_DATA_IV_SIZE];
-        Self::fill_random(&mut urandom, &mut data_iv)?;
+        Self::fill_random(&mut data_iv)?;
         let mut meta_iv = [0u8; HIBERNATE_DATA_IV_SIZE];
-        Self::fill_random(&mut urandom, &mut meta_iv)?;
+        Self::fill_random(&mut meta_iv)?;
         // Initialize the other keys with random junk as well to avoid bugs
         // where zeroed keys get used. These should never actually get used with
         // the random data (they'd be undecryptable if they were).
         let mut meta_eph_public = [0u8; HIBERNATE_META_KEY_SIZE];
-        Self::fill_random(&mut urandom, &mut meta_eph_public)?;
+        Self::fill_random(&mut meta_eph_public)?;
         Ok(Self {
             image_size: 0,
             flags: 0,
@@ -471,24 +466,9 @@ impl HibernateMetadata {
     }
 
     /// Fill a buffer with random bytes, given an open file to /dev/urandom.
-    fn fill_random(urandom: &mut File, buf: &mut [u8]) -> Result<()> {
-        let length = buf.len();
-        let mut slice = [IoSliceMut::new(buf)];
-        let bytes_read = match urandom.read_vectored(&mut slice) {
-            Ok(s) => s,
-            Err(e) => {
-                return Err(HibernateError::FileIoError(
-                    "Failed to read urandom".to_string(),
-                    e,
-                ))
-            }
-        };
-
-        if bytes_read != length {
-            return Err(HibernateError::IoSizeError(format!(
-                "Only read {} of {} bytes",
-                bytes_read, length
-            )));
+    fn fill_random(buf: &mut [u8]) -> Result<()> {
+        if let Err(e) = rand_bytes(buf, Source::Pseudorandom) {
+            return Err(HibernateError::RandomError(e));
         }
 
         Ok(())

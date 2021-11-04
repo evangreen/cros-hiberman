@@ -30,31 +30,31 @@ struct HibernateCookie {
 }
 
 /// Define the size of the region we update.
-static HIBERNATE_COOKIE_READ_SIZE: usize = 0x400;
-static HIBERNATE_COOKIE_WRITE_SIZE: usize = 0x400;
+const HIBERNATE_COOKIE_READ_SIZE: usize = 0x400;
+const HIBERNATE_COOKIE_WRITE_SIZE: usize = 0x400;
 /// Define the magic value the GPT stamps down, which we will use to verify
 /// we're writing to an area that we expect. If somehow the world shifted out
 /// from under us, this could prevent us from silently corrupting data.
-static GPT_MAGIC_OFFSET: usize = 0x200;
-static GPT_MAGIC: u64 = 0x5452415020494645; // 'EFI PART'
+const GPT_MAGIC_OFFSET: usize = 0x200;
+const GPT_MAGIC: u64 = 0x5452415020494645; // 'EFI PART'
 
 /// The beginning of the disk starts with a protective MBR, followed by a sector
 /// just for the GPT header. The GPT header is quite small and doesn't use its
 /// whole sector. Define the offset towards the end of the region where the
 /// cookie will be written.
-static HIBERNATE_MAGIC_OFFSET: usize = 0x3E0;
+const HIBERNATE_MAGIC_OFFSET: usize = 0x3E0;
 /// Define the magic token we write to indicate a valid hibernate partition.
 /// This is both big (as in bigger than a single bit), and points the finger at
 /// an obvious culprit, in the case this does end up unintentionally writing
 /// over important data. This is made arbitrarily, but intentionally, to be 16
 /// bytes.
-static HIBERNATE_MAGIC: &str = "HibernateCookie!";
+const HIBERNATE_MAGIC: &[u8] = b"HibernateCookie!";
 /// Define a known "not valid" value as well. This is treated identically to
 /// anything else that is invalid, but again could serve as a more useful
 /// breadcrumb to someone debugging than 16 vanilla zeroes.
-static HIBERNATE_MAGIC_POISON: &str = "HibernateInvalid";
+const HIBERNATE_MAGIC_POISON: &[u8] = b"HibernateInvalid";
 /// Define the size of the magic token.
-static HIBERNATE_MAGIC_SIZE: usize = 16;
+const HIBERNATE_MAGIC_SIZE: usize = 16;
 
 impl HibernateCookie {
     /// Create a new HibernateCookie structure. This allocates resources but
@@ -117,7 +117,7 @@ impl HibernateCookie {
 
         let magic_start = HIBERNATE_MAGIC_OFFSET;
         let magic_end = magic_start + HIBERNATE_MAGIC_SIZE;
-        let equal = buffer_slice[magic_start..magic_end] == *HIBERNATE_MAGIC.as_bytes();
+        let equal = buffer_slice[magic_start..magic_end] == *HIBERNATE_MAGIC;
         Ok(equal)
     }
 
@@ -144,7 +144,7 @@ impl HibernateCookie {
         };
 
         let buffer_slice = self.buffer.u8_slice_mut();
-        buffer_slice[magic_start..magic_end].copy_from_slice(cookie.as_bytes());
+        buffer_slice[magic_start..magic_end].copy_from_slice(cookie);
         let end = HIBERNATE_COOKIE_WRITE_SIZE;
         let slice = [IoSlice::new(&buffer_slice[..end])];
         let bytes_written = match self.blockdev.write_vectored(&slice) {
