@@ -3,8 +3,7 @@ target/
 **/*.rs.bk
 **/*.sw[po]
 **/*.orig
-**/Cargo.lock
-!/Cargo.lock
+Cargo.lock
 lcov.info
 .idea
 .vscode
