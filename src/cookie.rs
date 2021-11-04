@@ -189,7 +189,7 @@ pub fn get_hibernate_cookie(path_str: Option<&String>) -> Result<bool> {
         Some(p) => Path::new(p),
     };
 
-    let mut cookie = HibernateCookie::new(&path)?;
+    let mut cookie = HibernateCookie::new(path)?;
     cookie.read()
 }
 
@@ -207,6 +207,6 @@ pub fn set_hibernate_cookie(path_str: Option<&String>, valid: bool) -> Result<()
         Some(p) => Path::new(p),
     };
 
-    let mut cookie = HibernateCookie::new(&path)?;
+    let mut cookie = HibernateCookie::new(path)?;
     cookie.write(valid)
 }

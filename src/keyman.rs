@@ -85,7 +85,7 @@ impl HibernateKeyManager {
 
         assert!(public_key.len() == HIBERNATE_META_KEY_SIZE);
 
-        let slice = [IoSlice::new(&public_key)];
+        let slice = [IoSlice::new(public_key)];
         let bytes_written = match key_file.write_vectored(&slice) {
             Ok(b) => b,
             Err(e) => {
