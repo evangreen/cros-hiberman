@@ -4,6 +4,7 @@
 
 //! Coordinates suspend-to-disk activities
 
+use getopts::{self, Options};
 use hiberman::{self, error};
 use hiberman::{HibernateOptions, ResumeOptions};
 use sys_util::syslog;
@@ -30,40 +31,53 @@ fn init_logging() -> std::result::Result<(), ()> {
     Ok(())
 }
 
-fn cookie_usage(error: bool) {
-    let usage_msg = r#"Usage: hiberman cookie <path> [options]
+fn cookie_usage(error: bool, options: &Options) {
+    let brief = r#"Usage: hiberman cookie <path> [options]
 Get or set the hibernate cookie info. With no options, gets the
 current status of the hibernate cookie. Returns 0 if the cookie
 indicates a valid hibernate image, or 1 if no image.
-
-Option are:
-    --set -- Set the cookie to indicate a valid hibernate image.
-    --clear -- Clear the cookie to indicate no valid hibernate image.
-    --verbose -- Print more, including for "get" operations the status
-      of the cookie.
-    --help -- Print this help text.
 "#;
 
-    print_usage(usage_msg, error);
+    print_usage(&options.usage(brief), error);
 }
 
 fn hiberman_cookie(args: &mut std::env::Args) -> std::result::Result<(), ()> {
     // Note: Don't fire up logging immediately in this command as it's called
     // during very early init, before syslog is ready.
-    let mut clear_cookie = false;
-    let mut set_cookie = false;
-    let mut path = None;
-    let mut verbose = false;
-    for arg in args {
-        match arg.as_ref() {
-            "--verbose" => verbose = true,
-            "--set" => set_cookie = true,
-            "--clear" => clear_cookie = true,
-            "--help" => cookie_usage(false),
-            _ => {
-                path = Some(arg);
-            }
+    let mut opts = Options::new();
+    opts.optflag(
+        "c",
+        "clear",
+        "Clear the cookie to indicate no valid hibernate image",
+    );
+    opts.optflag("h", "help", "Print this help text");
+    opts.optflag(
+        "s",
+        "set",
+        "Set the cookie to indicate a valid hibernate image",
+    );
+    opts.optflag("v", "verbose", "Print more during the command");
+    let args: Vec<String> = args.collect();
+    let matches = match opts.parse(&args[..]) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Failed to parse arguments: {}", e);
+            cookie_usage(true, &opts);
+            return Err(());
         }
+    };
+
+    if matches.opt_present("h") {
+        cookie_usage(false, &opts);
+        return Ok(());
+    }
+
+    let clear_cookie = matches.opt_present("c");
+    let set_cookie = matches.opt_present("s");
+    let mut path = None;
+    let verbose = matches.opt_present("v");
+    if !matches.free.is_empty() {
+        path = Some(matches.free[0].clone());
     }
 
     // In verbose mode, or for anything other than "get", fire up logging.
@@ -102,87 +116,87 @@ fn hiberman_cookie(args: &mut std::env::Args) -> std::result::Result<(), ()> {
     }
 }
 
-fn cat_usage(error: bool) {
-    let usage_msg = r#"Usage: hiberman cat <file> [file...]
+fn cat_usage(error: bool, options: &Options) {
+    let brief = r#"Usage: hiberman cat [options] <file> [file...]
 Print a disk file to stdout. Since disk files write to blocks
 underneath the file system, they cannot be read reliably by normal
 file system accesses.
-
-Option are:
-    --log -- This file is a log file (stop on first nul byte).
-    --help -- Print this help text.
 "#;
 
-    print_usage(usage_msg, error);
+    print_usage(&options.usage(brief), error);
 }
 
 fn hiberman_cat(args: &mut std::env::Args) -> std::result::Result<(), ()> {
     init_logging()?;
-    let mut log = false;
+    let mut opts = Options::new();
+    opts.optflag("l", "log", "Treat the file(s) as log files");
+    opts.optflag("h", "help", "Print this help text");
+    let args: Vec<String> = args.collect();
+    let matches = match opts.parse(&args[..]) {
+        Ok(m) => m,
+        Err(e) => {
+            error!("Failed to parse arguments: {}", e);
+            cat_usage(true, &opts);
+            return Err(());
+        }
+    };
+
+    if matches.opt_present("h") {
+        cat_usage(false, &opts);
+        return Ok(());
+    }
+
     let mut result = Ok(());
-    for arg in args {
-        match arg.as_ref() {
-            "--log" => log = true,
-            "--help" => cat_usage(false),
-            _ => {
-                if let Err(e) = hiberman::cat::cat_disk_file(&arg, log) {
-                    error!("Failed to cat {}: {}", &arg, e);
-                    result = Err(())
-                }
-            }
+    let is_log = matches.opt_present("l");
+    for f in matches.free {
+        if let Err(e) = hiberman::cat::cat_disk_file(&f, is_log) {
+            error!("Failed to cat {}: {}", &f, e);
+            result = Err(())
         }
     }
 
     result
 }
 
-fn hibernate_usage(error: bool) {
-    let usage_msg = r#"Usage: hiberman hibernate [options]
+fn hibernate_usage(error: bool, options: &Options) {
+    let brief = r#"Usage: hiberman hibernate [options]
 Hibernate the system now.
-
-Options are:
-    --dry-run -- Create the hibernate image, but then exit rather than
-        shutting down. Note that it's not safe to resume to this image
-        as the file systems will likely be modified after the process
-        exits. Use this only for testing the hibernate sequence, in
-        tandem with resume --dry-run.
-    --unencrypted -- Do not encrypt the hibernate image. Useful
-        only in measurement and debug scenarios.
-    --test-keys -- Use test keys for debugging.
-    --help -- Print this help text.
 "#;
 
-    print_usage(usage_msg, error);
+    print_usage(&options.usage(brief), error);
 }
 
 fn hiberman_hibernate(args: &mut std::env::Args) -> std::result::Result<(), ()> {
     init_logging()?;
-    let mut options = HibernateOptions::default();
-    for arg in args {
-        match arg.as_ref() {
-            "--help" | "-h" => {
-                hibernate_usage(false);
-                return Ok(());
-            }
-
-            "--dry-run" | "-n" => {
-                options.dry_run = true;
-            }
-
-            "--test-keys" => {
-                options.test_keys = true;
-            }
-
-            "--unencrypted" => {
-                options.unencrypted = true;
-            }
-
-            _ => {
-                error!("invalid argument: {}", arg);
-                return Err(());
-            }
+    let mut opts = Options::new();
+    opts.optflag("h", "help", "Print this help text");
+    opts.optflag("n", "dry-run", "Create the hibernate image, but then exit rather than shutting down. This image should only be restored with --dry-run");
+    opts.optflag(
+        "u",
+        "unencrypted",
+        "Do not encrypt the hibernate image. Use only for test and debugging",
+    );
+    opts.optflag("t", "test-keys", "Use test keys for debugging");
+    let args: Vec<String> = args.collect();
+    let matches = match opts.parse(&args[..]) {
+        Ok(m) => m,
+        Err(e) => {
+            error!("Failed to parse arguments: {}", e);
+            hibernate_usage(true, &opts);
+            return Err(());
         }
+    };
+
+    if matches.opt_present("h") {
+        hibernate_usage(false, &opts);
+        return Ok(());
     }
+
+    let options = HibernateOptions {
+        dry_run: matches.opt_present("n"),
+        test_keys: matches.opt_present("t"),
+        unencrypted: matches.opt_present("u"),
+    };
 
     if let Err(e) = hiberman::hibernate(options) {
         error!("Failed to hibernate: {}", e);
@@ -192,55 +206,48 @@ fn hiberman_hibernate(args: &mut std::env::Args) -> std::result::Result<(), ()> 
     Ok(())
 }
 
-fn resume_usage(error: bool) {
-    let usage_msg = r#"Usage: hiberman resume [options]
+fn resume_usage(error: bool, options: &Options) {
+    let brief = r#"Usage: hiberman resume [options]
 Resume the system now. On success, does not return, but jumps back into the
 resumed image.
-
-Options are:
-    -n, --dry-run -- Load the resume image, but don't actually jump into it.
-    --unencrypted -- Allow unencrypted resume images. Useful only for
-        measurement and debug scenarios.
-    --test-keys -- Use test keys for debugging.
-    --no-preloader -- Do not use the ImagePreloader.
-    --help -- Print this help text.
 "#;
 
-    print_usage(usage_msg, error);
+    print_usage(&options.usage(brief), error);
 }
 
 fn hiberman_resume(args: &mut std::env::Args) -> std::result::Result<(), ()> {
     init_logging()?;
-    let mut options = ResumeOptions::default();
-    for arg in args {
-        match arg.as_ref() {
-            "--help" | "-h" => {
-                resume_usage(false);
-                return Ok(());
-            }
-
-            "-n" | "--dry-run" => {
-                options.dry_run = true;
-            }
-
-            "--test-keys" => {
-                options.test_keys = true;
-            }
-
-            "--no-preloader" => {
-                options.no_preloader = true;
-            }
-
-            "--unencrypted" => {
-                options.unencrypted = true;
-            }
-
-            _ => {
-                error!("invalid argument: {}", arg);
-                return Err(());
-            }
+    let mut opts = Options::new();
+    opts.optflag("h", "help", "Print this help text");
+    opts.optflag("n", "dry-run", "Create the hibernate image, but then exit rather than shutting down. This image should only be restored with --dry-run");
+    opts.optflag("p", "no-preloader", "Do not use the ImagePreloader");
+    opts.optflag(
+        "u",
+        "unencrypted",
+        "Do not encrypt the hibernate image. Use only for test and debugging",
+    );
+    opts.optflag("t", "test-keys", "Use test keys for debugging");
+    let args: Vec<String> = args.collect();
+    let matches = match opts.parse(&args[..]) {
+        Ok(m) => m,
+        Err(e) => {
+            error!("Failed to parse arguments: {}", e);
+            resume_usage(true, &opts);
+            return Err(());
         }
+    };
+
+    if matches.opt_present("h") {
+        resume_usage(false, &opts);
+        return Ok(());
     }
+
+    let options = ResumeOptions {
+        dry_run: matches.opt_present("n"),
+        no_preloader: matches.opt_present("p"),
+        test_keys: matches.opt_present("t"),
+        unencrypted: matches.opt_present("u"),
+    };
 
     if let Err(e) = hiberman::resume(options) {
         error!("Failed to resume: {}", e);
