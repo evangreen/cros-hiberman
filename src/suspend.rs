@@ -8,6 +8,7 @@ use std::ffi::CString;
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
+
 use crate::cookie::set_hibernate_cookie;
 use crate::crypto::CryptoWriter;
 use crate::diskfile::{BouncedDiskFile, DiskFile};

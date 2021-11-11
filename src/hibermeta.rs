@@ -5,8 +5,10 @@
 //! Implement support for managing hibernate metadata.
 
 use std::io::{IoSliceMut, Read, Write};
+
 use openssl::symm::{Cipher, Crypter, Mode};
 use sys_util::rand::{rand_bytes, Source};
+
 use crate::diskfile::BouncedDiskFile;
 use crate::hiberutil::{any_as_u8_slice, HibernateError, Result};
 

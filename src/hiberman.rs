@@ -7,6 +7,7 @@
 pub mod cat;
 pub mod cookie;
 pub mod hiberlog;
+
 mod crypto;
 mod dbus;
 mod diskfile;
@@ -25,6 +26,7 @@ mod suspend;
 mod sysfs;
 
 pub use hiberutil::{HibernateOptions, ResumeOptions};
+
 use hiberutil::Result;
 use resume::ResumeConductor;
 use suspend::SuspendConductor;

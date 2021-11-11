@@ -8,7 +8,9 @@ use std::fs::{metadata, File, OpenOptions};
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
+
 use libc::{self, c_int, c_ulong, c_void, loff_t};
+
 use crate::hiberutil::{HibernateError, Result};
 
 const SNAPSHOT_PATH: &str = "/dev/snapshot";
@@ -38,7 +40,8 @@ impl SnapshotDevice {
             )));
         }
 
-        let snapshot_meta = metadata(SNAPSHOT_PATH).map_err(|e| HibernateError::OpenFileError(SNAPSHOT_PATH.to_string(), e))?;
+        let snapshot_meta = metadata(SNAPSHOT_PATH)
+            .map_err(|e| HibernateError::OpenFileError(SNAPSHOT_PATH.to_string(), e))?;
         if !snapshot_meta.file_type().is_char_device() {
             return Err(HibernateError::SnapshotError(format!(
                 "Snapshot device {} is not a character device",

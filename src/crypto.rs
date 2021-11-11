@@ -5,7 +5,9 @@
 //! Implement image symmetric encryption functionality.
 
 use std::io::{IoSlice, IoSliceMut, Read, Write};
+
 use openssl::symm::{Cipher, Crypter, Mode};
+
 use crate::hibermeta::{HIBERNATE_DATA_IV_SIZE, HIBERNATE_DATA_KEY_SIZE};
 use crate::hiberutil::Result;
 use crate::mmapbuf::MmapBuffer;

@@ -20,7 +20,9 @@
 
 use std::convert::TryInto;
 use std::io::{Error as IoError, ErrorKind, Read, Write};
+
 use openssl::hash::{Hasher, MessageDigest};
+
 use crate::debug;
 use crate::hibermeta::{HibernateMetadata, HIBERNATE_HASH_SIZE};
 use crate::hiberutil::get_page_size;

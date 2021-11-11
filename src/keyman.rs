@@ -10,8 +10,10 @@ use std::fs::create_dir;
 use std::fs::File;
 use std::io::{IoSlice, Read, Write};
 use std::path::Path;
+
 use openssl::derive::Deriver;
 use openssl::pkey::{Id, PKey, Private, Public};
+
 use crate::hibermeta::{HibernateMetadata, HIBERNATE_DATA_KEY_SIZE, HIBERNATE_META_KEY_SIZE};
 use crate::hiberutil::{HibernateError, Result};
 use crate::{error, info, warn};
@@ -80,7 +82,8 @@ impl HibernateKeyManager {
 
         let key_path = Path::new(PUBLIC_KEY_DIR).join(PUBLIC_KEY_NAME);
         info!("Saving public key to {}", key_path.display());
-        let mut key_file = File::create(&key_path).map_err(|e| HibernateError::OpenFileError(key_path.display().to_string(), e))?;
+        let mut key_file = File::create(&key_path)
+            .map_err(|e| HibernateError::OpenFileError(key_path.display().to_string(), e))?;
         let public_key = &self.private_key.as_ref().unwrap().raw_public_key().unwrap();
 
         assert!(public_key.len() == HIBERNATE_META_KEY_SIZE);

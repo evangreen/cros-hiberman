@@ -7,6 +7,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{Error as IoError, ErrorKind, IoSlice, IoSliceMut, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::OpenOptionsExt;
+
 use crate::fiemap::{Fiemap, FiemapExtent};
 use crate::hiberutil::{get_page_size, path_to_stateful_part, HibernateError, Result};
 use crate::mmapbuf::MmapBuffer;

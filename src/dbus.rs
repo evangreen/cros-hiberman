@@ -7,10 +7,12 @@
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+
 use dbus::blocking::Connection;
 use dbus::channel::MatchingReceiver;
 use dbus::message::MatchRule;
 use dbus_crossroads::{Context, Crossroads};
+
 use crate::hiberutil::{HibernateError, Result};
 use crate::{debug, error, info};
 

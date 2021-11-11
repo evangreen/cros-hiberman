@@ -7,6 +7,7 @@
 //! got it from the rust standard library before it was removed.
 
 use libc::c_void;
+
 use crate::hiberutil::{get_page_size, HibernateError, Result};
 
 pub struct MmapBuffer {

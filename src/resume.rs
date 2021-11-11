@@ -5,6 +5,7 @@
 //! Implement hibernate resume functionality
 
 use std::io::{Read, Write};
+
 use crate::cookie::set_hibernate_cookie;
 use crate::crypto::CryptoReader;
 use crate::dbus::HiberDbusConnection;

@@ -7,6 +7,7 @@
 use std::fs::{create_dir, File, OpenOptions};
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
+
 use crate::diskfile::{BouncedDiskFile, DiskFile};
 use crate::hiberutil::{get_page_size, get_total_memory_pages, HibernateError, Result};
 use crate::splitter::HIBER_HEADER_MAX_SIZE;
@@ -92,7 +93,11 @@ pub fn preallocate_hiberfile() -> Result<DiskFile> {
 /// Open a pre-existing disk file with bounce buffer,
 /// still with read and write permissions.
 pub fn open_bounced_disk_file(path: &Path) -> Result<BouncedDiskFile> {
-    let mut file = OpenOptions::new().read(true).write(true).open(path).map_err(|e| HibernateError::OpenFileError(path.display().to_string(), e))?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|e| HibernateError::OpenFileError(path.display().to_string(), e))?;
     BouncedDiskFile::new(&mut file, None)
 }
 
@@ -161,6 +166,10 @@ fn preallocate_file(path: &Path, size: i64) -> Result<File> {
 
 /// Open a pre-existing disk file, still with read and write permissions.
 fn open_disk_file(path: &Path) -> Result<DiskFile> {
-    let mut file = OpenOptions::new().read(true).write(true).open(path).map_err(|e| HibernateError::OpenFileError(path.display().to_string(), e))?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|e| HibernateError::OpenFileError(path.display().to_string(), e))?;
     DiskFile::new(&mut file, None)
 }

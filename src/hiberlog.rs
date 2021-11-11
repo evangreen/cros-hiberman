@@ -9,8 +9,11 @@ use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::str;
 use std::sync::{MutexGuard, Once};
 use std::time::Instant;
+
 use sync::Mutex;
+
 pub use sys_util::syslog::{Facility, Priority};
+
 use crate::diskfile::BouncedDiskFile;
 use crate::files::open_log_file;
 use crate::hiberutil::{HibernateError, Result};
@@ -142,7 +145,11 @@ struct Hiberlog {
 
 impl Hiberlog {
     pub fn new() -> Result<Self> {
-        let kmsg = OpenOptions::new().read(true).write(true).open(KMSG_PATH).map_err(|e| HibernateError::OpenFileError(KMSG_PATH.to_string(), e))?;
+        let kmsg = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(KMSG_PATH)
+            .map_err(|e| HibernateError::OpenFileError(KMSG_PATH.to_string(), e))?;
         Ok(Hiberlog {
             file: None,
             kmsg,
