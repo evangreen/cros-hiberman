@@ -89,15 +89,9 @@ impl HibernateKeyManager {
         assert!(public_key.len() == HIBERNATE_META_KEY_SIZE);
 
         let slice = [IoSlice::new(public_key)];
-        let bytes_written = match key_file.write_vectored(&slice) {
-            Ok(b) => b,
-            Err(e) => {
-                return Err(HibernateError::FileIoError(
-                    "Failed to write".to_string(),
-                    e,
-                ))
-            }
-        };
+        let bytes_written = key_file
+            .write_vectored(&slice)
+            .map_err(|e| HibernateError::FileIoError("Failed to write".to_string(), e))?;
 
         if bytes_written != public_key.len() {
             return Err(HibernateError::KeyManagerError(
@@ -129,11 +123,9 @@ impl HibernateKeyManager {
         };
 
         let mut public_key = [0u8; HIBERNATE_META_KEY_SIZE];
-        let bytes_read = match key_file.read(&mut public_key) {
-            Ok(b) => b,
-            Err(e) => return Err(HibernateError::FileIoError("Failed to read".to_string(), e)),
-        };
-
+        let bytes_read = key_file
+            .read(&mut public_key)
+            .map_err(|e| HibernateError::FileIoError("Failed to read".to_string(), e))?;
         if bytes_read != public_key.len() {
             return Err(HibernateError::KeyManagerError(
                 "Read too few bytes".to_string(),

@@ -36,37 +36,26 @@ impl Swappiness {
 
     /// Set the current swappiness value.
     pub fn set_swappiness(&mut self, value: i32) -> Result<()> {
-        if let Err(e) = self.file.seek(SeekFrom::Start(0)) {
-            return Err(HibernateError::FileIoError("Failed to seek".to_string(), e));
-        }
+        self.file
+            .seek(SeekFrom::Start(0))
+            .map_err(|e| HibernateError::FileIoError("Failed to seek".to_string(), e))?;
 
-        match writeln!(self.file, "{}", value) {
-            Err(e) => Err(HibernateError::FileIoError(
-                "Failed to write".to_string(),
-                e,
-            )),
-            Ok(_) => Ok(()),
-        }
+        writeln!(self.file, "{}", value)
+            .map_err(|e| HibernateError::FileIoError("Failed to write".to_string(), e))?;
+
+        Ok(())
     }
 
     /// Internal helper function to read the current swappiness value.
     fn read_swappiness(file: &mut File) -> Result<i32> {
         let mut s = String::with_capacity(10);
-        if let Err(e) = file.seek(SeekFrom::Start(0)) {
-            return Err(HibernateError::FileIoError("Failed to seek".to_string(), e));
-        }
-
-        if let Err(e) = file.read_to_string(&mut s) {
-            return Err(HibernateError::FileIoError("Failed to read".to_string(), e));
-        }
-
-        match s.trim().parse::<i32>() {
-            Err(_) => Err(HibernateError::SwappinessError(format!(
-                "Unexpected value: {}",
-                s
-            ))),
-            Ok(v) => Ok(v),
-        }
+        file.seek(SeekFrom::Start(0))
+            .map_err(|e| HibernateError::FileIoError("Failed to seek".to_string(), e))?;
+        file.read_to_string(&mut s)
+            .map_err(|e| HibernateError::FileIoError("Failed to read".to_string(), e))?;
+        s.trim()
+            .parse::<i32>()
+            .map_err(|_| HibernateError::SwappinessError(format!("Unexpected value: {}", s)))
     }
 }
 

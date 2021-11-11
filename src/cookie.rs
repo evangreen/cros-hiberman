@@ -76,19 +76,17 @@ impl HibernateCookie {
     /// On success, returns a boolean that is true if the hibernate cookie is
     /// set (indicating the on-disk file systems should not be altered).
     pub fn read(&mut self) -> Result<bool> {
-        if let Err(e) = self.blockdev.seek(SeekFrom::Start(0)) {
-            return Err(HibernateError::FileIoError("Failed to seek".to_string(), e));
-        }
-
+        self.blockdev
+            .seek(SeekFrom::Start(0))
+            .map_err(|e| HibernateError::FileIoError("Failed to seek".to_string(), e))?;
         let buffer_slice = self.buffer.u8_slice_mut();
         let mut slice_mut = [IoSliceMut::new(
             &mut buffer_slice[..HIBERNATE_COOKIE_READ_SIZE],
         )];
-        let bytes_read = match self.blockdev.read_vectored(&mut slice_mut) {
-            Ok(s) => s,
-            Err(e) => return Err(HibernateError::FileIoError("Failed to read".to_string(), e)),
-        };
-
+        let bytes_read = self
+            .blockdev
+            .read_vectored(&mut slice_mut)
+            .map_err(|e| HibernateError::FileIoError("Failed to read".to_string(), e))?;
         if bytes_read < HIBERNATE_COOKIE_READ_SIZE {
             return Err(HibernateError::CookieError(format!(
                 "Only read {:x?} bytes",
@@ -126,10 +124,9 @@ impl HibernateCookie {
     /// resume, file systems can be mounted RW).
     pub fn write(&mut self, valid: bool) -> Result<()> {
         let existing = self.read()?;
-        if let Err(e) = self.blockdev.seek(SeekFrom::Start(0)) {
-            return Err(HibernateError::FileIoError("Failed to seek".to_string(), e));
-        }
-
+        self.blockdev
+            .seek(SeekFrom::Start(0))
+            .map_err(|e| HibernateError::FileIoError("Failed to seek".to_string(), e))?;
         if valid == existing {
             return Ok(());
         }
@@ -145,15 +142,10 @@ impl HibernateCookie {
         buffer_slice[magic_start..magic_end].copy_from_slice(cookie);
         let end = HIBERNATE_COOKIE_WRITE_SIZE;
         let slice = [IoSlice::new(&buffer_slice[..end])];
-        let bytes_written = match self.blockdev.write_vectored(&slice) {
-            Ok(s) => s,
-            Err(e) => {
-                return Err(HibernateError::FileIoError(
-                    "Failed to write".to_string(),
-                    e,
-                ))
-            }
-        };
+        let bytes_written = self
+            .blockdev
+            .write_vectored(&slice)
+            .map_err(|e| HibernateError::FileIoError("Failed to write".to_string(), e))?;
 
         if bytes_written < HIBERNATE_COOKIE_WRITE_SIZE {
             return Err(HibernateError::CookieError(format!(
@@ -162,17 +154,13 @@ impl HibernateCookie {
             )));
         }
 
-        if let Err(e) = self.blockdev.flush() {
-            return Err(HibernateError::FileIoError(
-                "Failed to flush".to_string(),
-                e,
-            ));
-        }
+        self.blockdev
+            .flush()
+            .map_err(|e| HibernateError::FileIoError("Failed to flush".to_string(), e))?;
 
-        if let Err(e) = self.blockdev.sync_all() {
-            return Err(HibernateError::FileIoError("Failed to sync".to_string(), e));
-        }
-
+        self.blockdev
+            .sync_all()
+            .map_err(|e| HibernateError::FileIoError("Failed to sync".to_string(), e))?;
         Ok(())
     }
 }

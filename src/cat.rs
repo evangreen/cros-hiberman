@@ -32,30 +32,22 @@ pub fn cat_disk_file(path_str: &str, is_log: bool) -> Result<()> {
             return Err(HibernateError::FileIoError("Failed to read".to_string(), e));
         }
 
-        if let Err(e) = stdout.write(&buf) {
-            return Err(HibernateError::FileIoError(
-                "Failed to write".to_string(),
-                e,
-            ));
-        }
+        stdout
+            .write(&buf)
+            .map_err(|e| HibernateError::FileIoError("Failed to write".to_string(), e))?;
     } else {
         let mut buf = vec![0u8; 4096];
         loop {
-            let bytes_read = match file.read(&mut buf) {
-                Ok(s) => s,
-                Err(e) => return Err(HibernateError::FileIoError("Failed to read".to_string(), e)),
-            };
-
+            let bytes_read = file
+                .read(&mut buf)
+                .map_err(|e| HibernateError::FileIoError("Failed to read".to_string(), e))?;
             if bytes_read == 0 {
                 break;
             }
 
-            if let Err(e) = stdout.write(&buf[..bytes_read]) {
-                return Err(HibernateError::FileIoError(
-                    "Failed to write".to_string(),
-                    e,
-                ));
-            }
+            stdout
+                .write(&buf[..bytes_read])
+                .map_err(|e| HibernateError::FileIoError("Failed to write".to_string(), e))?;
         }
     }
 

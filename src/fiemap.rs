@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-//! Implement fiemap support, which can tell you the underlying disk extents backing a file.
+//! Implement fiemap support, which can tell you the underlying disk extents
+//! backing a file.
 
 use std::fs::File;
 use std::mem;
@@ -112,9 +113,9 @@ impl Fiemap {
                 "logical {:x} physical {:x} len {:x} flags {:x}",
                 extent.fe_logical, extent.fe_physical, extent.fe_length, extent.fe_flags
             );
-            // If the extent has flags that wouldn't go well with direct access, report that
-            // now and fail. "Unwritten" is acceptable if the file is to be both written and
-            // read from underneath the file system.
+            // If the extent has flags that wouldn't go well with direct access,
+            // report that now and fail. "Unwritten" is acceptable if the file
+            // is to be both written and read from underneath the file system.
             if (extent.fe_flags & FIEMAP_NO_RAW_ACCESS_FLAGS) != 0 {
                 error!("File has bad flags {:x} for direct access. Extent logical {:x} physical {:x} len {:x}",
                        extent.fe_flags, extent.fe_logical, extent.fe_physical, extent.fe_length);
@@ -197,37 +198,49 @@ impl Fiemap {
         };
 
         let mut buffer = vec![0u8; buffer_size];
+        // Copy the fiemap struct into the beginning of the u8 buffer. This is
+        // safe because the buffer was allocated to be larger than this struct
+        // size.
         unsafe {
-            // Copy the fiemap struct into the beginning of the u8 buffer. This is safe
-            // because the buffer was allocated to be larger than this struct size.
             buffer[0..fiemap_len].copy_from_slice(any_as_u8_slice(&fiemap));
-            // Safe because the ioctl operates on a buffer bounded by the length we just
-            // supplied in fm_extent_count of the struct fiemap.
-            let rc = libc::ioctl(
+        }
+
+        // Safe because the ioctl operates on a buffer bounded by the length we
+        // just supplied in fm_extent_count of the struct fiemap.
+        let rc = unsafe {
+            libc::ioctl(
                 source_file.as_raw_fd(),
                 FS_IOC_FIEMAP,
                 buffer.as_mut_ptr() as *mut _ as *mut c_void,
-            );
-            if rc < 0 {
-                return Err(HibernateError::FiemapError(sys_util::Error::last()));
-            }
+            )
+        };
 
-            // Verify the ioctl returned the number of extents expected.
+        if rc < 0 {
+            return Err(HibernateError::FiemapError(sys_util::Error::last()));
+        }
+
+        // Verify the ioctl returned the number of extents expected. This is
+        // safe because the C_Fiemap is defined with the C convention, and all
+        // members are basic basic types.
+        unsafe {
             fiemap = std::ptr::read_unaligned(buffer[0..fiemap_len].as_ptr() as *const _);
-            if fiemap.fm_mapped_extents as usize != extents.len() {
-                return Err(HibernateError::InvalidFiemapError(format!(
-                    "Got {} fiemap extents, expected {}",
-                    fiemap.fm_mapped_extents,
-                    extents.len()
-                )));
-            }
+        }
 
-            // Copy the extents returned from the ioctl out into the vector.
-            for (i, extent) in extents.iter_mut().enumerate() {
-                let start = fiemap_len + (i * mem::size_of::<FiemapExtent>());
-                let end = start + mem::size_of::<FiemapExtent>();
-                // This is safe because the ioctl returned this many fiemap_extents.
-                // This copies from the u8 buffer back into safe (aligned) world.
+        if fiemap.fm_mapped_extents as usize != extents.len() {
+            return Err(HibernateError::InvalidFiemapError(format!(
+                "Got {} fiemap extents, expected {}",
+                fiemap.fm_mapped_extents,
+                extents.len()
+            )));
+        }
+
+        // Copy the extents returned from the ioctl out into the vector.
+        for (i, extent) in extents.iter_mut().enumerate() {
+            let start = fiemap_len + (i * mem::size_of::<FiemapExtent>());
+            let end = start + mem::size_of::<FiemapExtent>();
+            // This is safe because the ioctl returned this many fiemap_extents.
+            // This copies from the u8 buffer back into safe (aligned) world.
+            unsafe {
                 *extent = std::ptr::read_unaligned(buffer[start..end].as_ptr() as *const _);
             }
         }

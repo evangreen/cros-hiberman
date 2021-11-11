@@ -141,22 +141,19 @@ impl DiskFile {
     /// is located and used.
     pub fn new(fs_file: &mut File, block_file: Option<File>) -> Result<DiskFile> {
         let fiemap = Fiemap::new(fs_file)?;
-        let blockdev;
-        match block_file {
+        let blockdev = match block_file {
             None => {
                 let blockdev_path = path_to_stateful_part()?;
                 debug!("Found hibernate block device: {}", blockdev_path);
-                blockdev = OpenOptions::new()
+                OpenOptions::new()
                     .read(true)
                     .write(true)
                     .custom_flags(libc::O_DIRECT)
                     .open(&blockdev_path)
-                    .map_err(|e| HibernateError::OpenFileError(blockdev_path, e))?;
+                    .map_err(|e| HibernateError::OpenFileError(blockdev_path, e))?
             }
-            Some(f) => {
-                blockdev = f;
-            }
-        }
+            Some(f) => f,
+        };
 
         // This is safe because a zeroed extent is valid.
         let mut disk_file = unsafe {
@@ -170,13 +167,11 @@ impl DiskFile {
         };
 
         // Seek to the start of the file so the current_position is always valid.
-        match disk_file.seek(SeekFrom::Start(0)) {
-            Ok(_) => Ok(disk_file),
-            Err(e) => Err(HibernateError::FileIoError(
-                "Failed to do initial seek".to_string(),
-                e,
-            )),
-        }
+        disk_file
+            .seek(SeekFrom::Start(0))
+            .map_err(|e| HibernateError::FileIoError("Failed to do initial seek".to_string(), e))?;
+
+        Ok(disk_file)
     }
 
     /// Enable or disable logging coming from this DiskFile object. Logging
@@ -193,10 +188,9 @@ impl DiskFile {
 
     /// Convenience method to reset the file position back to the start of the file.
     pub fn rewind(&mut self) -> Result<()> {
-        match self.seek(SeekFrom::Start(0)) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(HibernateError::FileIoError("Failed to seek".to_string(), e)),
-        }
+        self.seek(SeekFrom::Start(0))
+            .map_err(|e| HibernateError::FileIoError("Failed to seek".to_string(), e))?;
+        Ok(())
     }
 
     /// Helper function to determine whether the current position has valid

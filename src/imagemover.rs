@@ -141,11 +141,10 @@ impl<'a> ImageMover<'a> {
         let end = start + length;
         let buffer_slice = self.buffer.u8_slice_mut();
         let mut slice_mut = [IoSliceMut::new(&mut buffer_slice[start..end])];
-        let bytes_read = match self.source_file.read_vectored(&mut slice_mut) {
-            Ok(s) => s,
-            Err(e) => return Err(HibernateError::FileIoError("Failed to read".to_string(), e)),
-        };
-
+        let bytes_read = self
+            .source_file
+            .read_vectored(&mut slice_mut)
+            .map_err(|e| HibernateError::FileIoError("Failed to read".to_string(), e))?;
         if bytes_read < length {
             warn!(
                 "Only Read {}/{}, {}/{}",

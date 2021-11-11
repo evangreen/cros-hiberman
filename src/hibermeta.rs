@@ -216,11 +216,9 @@ impl HibernateMetadata {
     pub fn load_from_disk(disk_file: &mut BouncedDiskFile) -> Result<Self> {
         let mut buf = vec![0u8; 4096];
         let mut slice = [IoSliceMut::new(&mut buf)];
-        let bytes_read = match disk_file.read_vectored(&mut slice) {
-            Ok(s) => s,
-            Err(e) => return Err(HibernateError::FileIoError("Failed to read".to_string(), e)),
-        };
-
+        let bytes_read = disk_file
+            .read_vectored(&mut slice)
+            .map_err(|e| HibernateError::FileIoError("Failed to read".to_string(), e))?;
         if bytes_read < std::mem::size_of::<PublicHibernateMetadata>() {
             return Err(HibernateError::MetadataError(
                 "Read too few bytes".to_string(),
@@ -351,15 +349,9 @@ impl HibernateMetadata {
                 .copy_from_slice(any_as_u8_slice(&public_data));
         }
 
-        let bytes_written = match disk_file.write(&buf[..]) {
-            Ok(s) => s,
-            Err(e) => {
-                return Err(HibernateError::FileIoError(
-                    "Failed to write metadata".to_string(),
-                    e,
-                ))
-            }
-        };
+        let bytes_written = disk_file
+            .write(&buf[..])
+            .map_err(|e| HibernateError::FileIoError("Failed to write metadata".to_string(), e))?;
 
         if bytes_written != buf.len() {
             return Err(HibernateError::MetadataError(

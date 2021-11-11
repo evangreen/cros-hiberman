@@ -143,17 +143,16 @@ impl ResumeConductor {
         info!("Freezing userspace");
         let snap_dev = self.snap_dev.as_mut().unwrap();
         snap_dev.freeze_userspace()?;
-        let result;
-        if self.options.dry_run {
+        let result = if self.options.dry_run {
             info!("Not launching resume image: in a dry run.");
             // Flush the resume file logs.
             flush_log();
             // Keep logs in memory, like launch_resume_image() does.
             redirect_log(HiberlogOut::BufferInMemory, None);
-            result = Ok(())
+            Ok(())
         } else {
-            result = self.launch_resume_image();
-        }
+            self.launch_resume_image()
+        };
 
         info!("Unfreezing userspace");
         // Take the snap_dev, unfreeze userspace, and drop it.
@@ -204,15 +203,14 @@ impl ResumeConductor {
                 "Loading {} header pages ({} bytes)",
                 header_pages, header_size
             );
-            let mut mover = ImageMover::new(
+            ImageMover::new(
                 &mut preloader,
                 &mut snap_dev.file,
                 header_size as i64,
                 page_size * BUFFER_PAGES,
                 page_size,
-            )?;
-            mover.move_all()?;
-            drop(mover);
+            )?
+            .move_all()?;
             debug!("Done loading header pages");
             image_size -= header_size as u64;
 
@@ -291,14 +289,14 @@ impl ResumeConductor {
 
         // Fire up the big image pump into the kernel.
         let snap_dev = self.snap_dev.as_mut().unwrap();
-        let mut reader = ImageMover::new(
+        ImageMover::new(
             mover_source,
             &mut snap_dev.file,
             image_size as i64,
             page_size * BUFFER_PAGES,
             page_size,
-        )?;
-        reader.move_all()?;
+        )?
+        .move_all()?;
         info!("Moved {} MB", image_size / 1024 / 1024);
         // Check the header pages hash. Ideally this would be done just after
         // the private data was loaded, but by then we've handed a mutable
@@ -364,11 +362,9 @@ impl ResumeConductor {
     fn read_first_partial_page(&mut self, source: &mut dyn Read, page_size: usize) -> Result<()> {
         let mut buf = vec![0u8; page_size];
         // Get the whole page from the source, including the first byte.
-        let bytes_read = match source.read(&mut buf[..]) {
-            Ok(s) => s,
-            Err(e) => return Err(HibernateError::FileIoError("Failed to read".to_string(), e)),
-        };
-
+        let bytes_read = source
+            .read(&mut buf[..])
+            .map_err(|e| HibernateError::FileIoError("Failed to read".to_string(), e))?;
         if bytes_read != page_size {
             return Err(HibernateError::IoSizeError(format!(
                 "Read only {} of {} byte",
@@ -383,15 +379,13 @@ impl ResumeConductor {
         }
 
         // Now write most of the page.
-        let bytes_written = match self.snap_dev.as_mut().unwrap().file.write(&buf[1..]) {
-            Ok(s) => s,
-            Err(e) => {
-                return Err(HibernateError::FileIoError(
-                    "Failed to write".to_string(),
-                    e,
-                ))
-            }
-        };
+        let bytes_written = self
+            .snap_dev
+            .as_mut()
+            .unwrap()
+            .file
+            .write(&buf[1..])
+            .map_err(|e| HibernateError::FileIoError("Failed to write".to_string(), e))?;
 
         if bytes_written != page_size - 1 {
             return Err(HibernateError::IoSizeError(format!(

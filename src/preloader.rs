@@ -178,11 +178,9 @@ impl ImageChunk {
         let mut buffer = MmapBuffer::new(size)?;
         let buffer_slice = buffer.u8_slice_mut();
         let mut slice_mut = [IoSliceMut::new(&mut buffer_slice[..size])];
-        let bytes_read = match source.read_vectored(&mut slice_mut) {
-            Ok(s) => s,
-            Err(e) => return Err(HibernateError::FileIoError("Failed to read".to_string(), e)),
-        };
-
+        let bytes_read = source
+            .read_vectored(&mut slice_mut)
+            .map_err(|e| HibernateError::FileIoError("Failed to read".to_string(), e))?;
         if bytes_read < size {
             warn!("Only Read {}/{}", bytes_read, size);
         }

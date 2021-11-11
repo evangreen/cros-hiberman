@@ -372,12 +372,8 @@ pub fn clear_log_file(file: &mut BouncedDiskFile) -> Result<()> {
     let mut buf = [0u8; FLUSH_THRESHOLD];
     buf[0] = b'\n';
     file.rewind()?;
-    if let Err(e) = file.write(&buf) {
-        return Err(HibernateError::FileIoError(
-            "Failed to write".to_string(),
-            e,
-        ));
-    }
+    file.write(&buf)
+        .map_err(|e| HibernateError::FileIoError("Failed to write".to_string(), e))?;
 
     Ok(())
 }
