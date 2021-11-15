@@ -199,7 +199,7 @@ fn hiberman_hibernate(args: &mut std::env::Args) -> std::result::Result<(), ()> 
     };
 
     if let Err(e) = hiberman::hibernate(options) {
-        error!("Failed to hibernate: {}", e);
+        error!("Failed to hibernate: {:?}", e);
         return Err(());
     }
 
@@ -300,7 +300,7 @@ fn hiberman_main() -> std::result::Result<(), ()> {
         "hibernate" => hiberman_hibernate(&mut args),
         "resume" => hiberman_resume(&mut args),
         _ => {
-            error!("unknown subcommand: {}", subcommand);
+            eprintln!("unknown subcommand: {}", subcommand);
             Err(())
         }
     }

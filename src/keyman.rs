@@ -11,12 +11,13 @@ use std::fs::File;
 use std::io::{IoSlice, Read, Write};
 use std::path::Path;
 
+use anyhow::{Context, Result};
 use openssl::derive::Deriver;
 use openssl::pkey::{Id, PKey, Private, Public};
 
 use crate::hibermeta::{HibernateMetadata, HIBERNATE_DATA_KEY_SIZE, HIBERNATE_META_KEY_SIZE};
-use crate::hiberutil::{HibernateError, Result};
-use crate::{error, info, warn};
+use crate::hiberutil::HibernateError;
+use crate::{info, warn};
 
 /// Define the ramfs location where the hibernate public key is stored.
 static PUBLIC_KEY_DIR: &str = "/run/hibernate/";
@@ -70,20 +71,14 @@ impl HibernateKeyManager {
         if matches!(self.private_key, None) {
             return Err(HibernateError::KeyManagerError(
                 "No public key to save".to_string(),
-            ));
+            ))
+            .context("Cannot save public key");
         }
 
-        if let Err(e) = create_dir(PUBLIC_KEY_DIR) {
-            return Err(HibernateError::CreateDirectoryError(
-                PUBLIC_KEY_DIR.to_string(),
-                e,
-            ));
-        }
-
+        create_dir(PUBLIC_KEY_DIR).context("Cannot create directory to save public key")?;
         let key_path = Path::new(PUBLIC_KEY_DIR).join(PUBLIC_KEY_NAME);
         info!("Saving public key to {}", key_path.display());
-        let mut key_file = File::create(&key_path)
-            .map_err(|e| HibernateError::OpenFileError(key_path.display().to_string(), e))?;
+        let mut key_file = File::create(&key_path).context("Cannot create public key file")?;
         let public_key = &self.private_key.as_ref().unwrap().raw_public_key().unwrap();
 
         assert!(public_key.len() == HIBERNATE_META_KEY_SIZE);
@@ -91,12 +86,13 @@ impl HibernateKeyManager {
         let slice = [IoSlice::new(public_key)];
         let bytes_written = key_file
             .write_vectored(&slice)
-            .map_err(|e| HibernateError::FileIoError("Failed to write".to_string(), e))?;
+            .context("Failed to write public key")?;
 
         if bytes_written != public_key.len() {
             return Err(HibernateError::KeyManagerError(
                 "Wrote too few bytes".to_string(),
-            ));
+            ))
+            .context("Failed to save public key");
         }
 
         Ok(())
@@ -107,29 +103,21 @@ impl HibernateKeyManager {
     pub fn load_public_key(&mut self) -> Result<()> {
         let key_path = Path::new(PUBLIC_KEY_DIR).join(PUBLIC_KEY_NAME);
         info!("Loading public key from {}", key_path.display());
-        let mut key_file = match File::open(&key_path) {
-            Ok(f) => f,
-            Err(e) => {
-                // Cryptohome should have handed the hibernate key to another
-                // instance of this program. If you see this message, that
-                // instance probably didn't launch, or never received keys from
-                // cryptohome.
-                error!("No hibernate public key. Use --test-keys to hibernate now");
-                return Err(HibernateError::OpenFileError(
-                    key_path.display().to_string(),
-                    e,
-                ));
-            }
-        };
+        // Cryptohome should have handed the hibernate key to another instance
+        // of this program. If you see this message, that instance probably
+        // didn't launch, or never received keys from cryptohome.
+        let mut key_file = File::open(&key_path)
+            .context("No hibernate public key. Use --test-keys to hibernate now")?;
 
         let mut public_key = [0u8; HIBERNATE_META_KEY_SIZE];
         let bytes_read = key_file
             .read(&mut public_key)
-            .map_err(|e| HibernateError::FileIoError("Failed to read".to_string(), e))?;
+            .context("Failed to read hibernate public key")?;
         if bytes_read != public_key.len() {
             return Err(HibernateError::KeyManagerError(
                 "Read too few bytes".to_string(),
-            ));
+            ))
+            .context("Failed to load hibernate public key");
         }
 
         self.public_key = Some(PKey::public_key_from_raw_bytes(&public_key, Id::X25519).unwrap());
@@ -148,6 +136,7 @@ impl HibernateKeyManager {
                 return Err(HibernateError::KeyManagerError(
                     "Unpopulated public key".to_string(),
                 ))
+                .context("Cannot install new metadata key");
             }
         };
 
@@ -171,7 +160,8 @@ impl HibernateKeyManager {
         if matches!(self.private_key, None) {
             return Err(HibernateError::KeyManagerError(
                 "Unpopulated private key".to_string(),
-            ));
+            ))
+            .context("Cannot install saved metadata key");
         }
 
         // Load the ephemeral public key.
@@ -195,22 +185,16 @@ impl HibernateKeyManager {
         assert!(deriver.len().unwrap() >= HIBERNATE_META_KEY_SIZE);
 
         let mut derived_metadata_key = vec![0u8; deriver.len().unwrap()];
-        let key_size = match deriver.derive(&mut derived_metadata_key) {
-            Ok(s) => s,
-            Err(e) => {
-                return Err(HibernateError::KeyManagerError(format!(
-                    "Failed to derive: {}",
-                    e
-                )))
-            }
-        };
-
+        let key_size = deriver
+            .derive(&mut derived_metadata_key)
+            .context("Failed to derive DH key")?;
         if key_size != derived_metadata_key.len() {
             return Err(HibernateError::KeyManagerError(format!(
                 "Derived size {}, expected {}",
                 key_size,
                 derived_metadata_key.len()
-            )));
+            )))
+            .context("Failed to derive DH key");
         }
 
         // Install the shared key into the metadata.

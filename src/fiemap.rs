@@ -9,9 +9,10 @@ use std::fs::File;
 use std::mem;
 use std::os::unix::io::AsRawFd;
 
+use anyhow::{Context, Result};
 use libc::{c_ulong, c_void};
 
-use crate::hiberutil::{any_as_u8_slice, HibernateError, Result};
+use crate::hiberutil::{any_as_u8_slice, HibernateError};
 use crate::{debug, error};
 
 /// Define the Linux ioctl number for getting the fiemap.
@@ -122,7 +123,8 @@ impl Fiemap {
                 return Err(HibernateError::InvalidFiemapError(format!(
                     "Fiemap extent has unexpected flags {:x}",
                     extent.fe_flags
-                )));
+                )))
+                .context("Invalid fiemap");
             }
         }
 
@@ -170,7 +172,8 @@ impl Fiemap {
         };
 
         if rc < 0 {
-            return Err(HibernateError::FiemapError(sys_util::Error::last()));
+            return Err(HibernateError::FiemapError(sys_util::Error::last()))
+                .context("Failed to get fiemap extent count");
         }
 
         Ok(param.fm_mapped_extents as u32)
@@ -216,7 +219,8 @@ impl Fiemap {
         };
 
         if rc < 0 {
-            return Err(HibernateError::FiemapError(sys_util::Error::last()));
+            return Err(HibernateError::FiemapError(sys_util::Error::last()))
+                .context("Failed to get fiemap");
         }
 
         // Verify the ioctl returned the number of extents expected. This is
@@ -231,7 +235,8 @@ impl Fiemap {
                 "Got {} fiemap extents, expected {}",
                 fiemap.fm_mapped_extents,
                 extents.len()
-            )));
+            )))
+            .context("Fiemap changed");
         }
 
         // Copy the extents returned from the ioctl out into the vector.

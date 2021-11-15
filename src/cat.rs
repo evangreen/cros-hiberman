@@ -7,9 +7,9 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 
+use anyhow::{Context, Result};
+
 use crate::files::open_bounced_disk_file;
-use crate::hiberutil::{HibernateError, Result};
-use crate::warn;
 
 /// Entry point to the `cat` command, which can lift DiskFile content out into
 /// the file system. Disk file content is not accessible via normal file system
@@ -27,27 +27,21 @@ pub fn cat_disk_file(path_str: &str, is_log: bool) -> Result<()> {
     if is_log {
         let mut reader = BufReader::new(file);
         let mut buf = Vec::<u8>::new();
-        if let Err(e) = reader.read_until(0, &mut buf) {
-            warn!("Failed to read log file: {}", e);
-            return Err(HibernateError::FileIoError("Failed to read".to_string(), e));
-        }
-
-        stdout
-            .write(&buf)
-            .map_err(|e| HibernateError::FileIoError("Failed to write".to_string(), e))?;
+        reader
+            .read_until(0, &mut buf)
+            .context("Failed to read log file")?;
+        stdout.write(&buf).context("Failed to print log file")?;
     } else {
         let mut buf = vec![0u8; 4096];
         loop {
-            let bytes_read = file
-                .read(&mut buf)
-                .map_err(|e| HibernateError::FileIoError("Failed to read".to_string(), e))?;
+            let bytes_read = file.read(&mut buf).context("Failed to read disk file")?;
             if bytes_read == 0 {
                 break;
             }
 
             stdout
                 .write(&buf[..bytes_read])
-                .map_err(|e| HibernateError::FileIoError("Failed to write".to_string(), e))?;
+                .context("Failed to print")?;
         }
     }
 

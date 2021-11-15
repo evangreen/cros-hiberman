@@ -6,6 +6,7 @@
 
 use std::process::Command;
 
+use anyhow::{Context, Result};
 use thiserror::Error as ThisError;
 
 use crate::{error, warn};
@@ -19,21 +20,9 @@ pub enum HibernateError {
     /// Cookie error
     #[error("Cookie error: {0}")]
     CookieError(String),
-    /// Failed to create the hibernate context directory.
-    #[error("Failed to create directory: {0}: {1}")]
-    CreateDirectoryError(String, std::io::Error),
     /// Dbus error
     #[error("Dbus error: {0}")]
     DbusError(String),
-    /// Failed to do an I/O operation on a file
-    #[error("Failed file operation: {0}: {1}")]
-    FileIoError(String, std::io::Error),
-    /// Failed to sync a file.
-    #[error("Failed file sync: {0}: {1}")]
-    FileSyncError(String, std::io::Error),
-    /// Failed to create or open a file.
-    #[error("Failed to open or create file: {0}: {1}")]
-    OpenFileError(String, std::io::Error),
     /// Failed to copy the FD for the polling context.
     #[error("Failed to fallocate the file: {0}")]
     FallocateError(sys_util::Error),
@@ -76,12 +65,6 @@ pub enum HibernateError {
     /// I/O size error
     #[error("I/O size error: {0}")]
     IoSizeError(String),
-    /// Urandom error.
-    #[error("urandom error: {0}")]
-    RandomError(sys_util::Error),
-    /// Failed to find the stateful mount.
-    #[error("Failed to find the stateful mount: {0}")]
-    RootdevError(String),
     /// Snapshot device error.
     #[error("Snapshot device error: {0}")]
     SnapshotError(String),
@@ -91,12 +74,7 @@ pub enum HibernateError {
     /// Statvfs error
     #[error("Statvfs error: {0}")]
     StatvfsError(sys_util::Error),
-    /// Swappiness error
-    #[error("Swappiness error: {0}")]
-    SwappinessError(String),
 }
-
-pub type Result<T> = std::result::Result<T, HibernateError>;
 
 /// Options taken from the command line affecting hibernate.
 #[derive(Default)]
@@ -156,16 +134,10 @@ pub fn path_to_stateful_part() -> Result<String> {
 /// Determine the path to the block device containing the stateful partition.
 /// Farm this out to rootdev to keep the magic in one place.
 pub fn path_to_stateful_block() -> Result<String> {
-    let output = match Command::new("/usr/bin/rootdev").arg("-d").output() {
-        Ok(o) => o,
-        Err(e) => {
-            return Err(HibernateError::RootdevError(format!(
-                "Failed to get rootdev: {}",
-                e
-            )))
-        }
-    };
-
+    let output = Command::new("/usr/bin/rootdev")
+        .arg("-d")
+        .output()
+        .context("Cannot get rootdev")?;
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
@@ -175,7 +147,8 @@ pub fn lock_process_memory() -> Result<()> {
     let rc = unsafe { libc::mlockall(libc::MCL_CURRENT | libc::MCL_FUTURE) };
 
     if rc < 0 {
-        return Err(HibernateError::MlockallError(sys_util::Error::last()));
+        return Err(HibernateError::MlockallError(sys_util::Error::last()))
+            .context("Cannot lock process memory");
     }
 
     Ok(())

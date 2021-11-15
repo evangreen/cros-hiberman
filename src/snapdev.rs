@@ -9,9 +9,10 @@ use std::os::unix::fs::FileTypeExt;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 
+use anyhow::{Context, Result};
 use libc::{self, c_int, c_ulong, c_void, loff_t};
 
-use crate::hiberutil::{HibernateError, Result};
+use crate::hiberutil::HibernateError;
 
 const SNAPSHOT_PATH: &str = "/dev/snapshot";
 
@@ -37,23 +38,25 @@ impl SnapshotDevice {
             return Err(HibernateError::SnapshotError(format!(
                 "Snapshot device {} does not exist",
                 SNAPSHOT_PATH
-            )));
+            )))
+            .context("Failed to open snapshot device");
         }
 
-        let snapshot_meta = metadata(SNAPSHOT_PATH)
-            .map_err(|e| HibernateError::OpenFileError(SNAPSHOT_PATH.to_string(), e))?;
+        let snapshot_meta =
+            metadata(SNAPSHOT_PATH).context("Failed to get file metadata for snapshot device")?;
         if !snapshot_meta.file_type().is_char_device() {
             return Err(HibernateError::SnapshotError(format!(
                 "Snapshot device {} is not a character device",
                 SNAPSHOT_PATH
-            )));
+            )))
+            .context("Failed to open snapshot device");
         }
 
         let file = OpenOptions::new()
             .read(!open_for_write)
             .write(open_for_write)
             .open(SNAPSHOT_PATH)
-            .map_err(|e| HibernateError::OpenFileError(SNAPSHOT_PATH.to_string(), e))?;
+            .context("Failed to open snapshot device")?;
 
         Ok(SnapshotDevice { file })
     }
@@ -131,7 +134,8 @@ impl SnapshotDevice {
             return Err(HibernateError::SnapshotIoctlError(
                 name.to_string(),
                 sys_util::Error::last(),
-            ));
+            ))
+            .context("Failed to execute ioctl on snapshot device");
         }
 
         Ok(())

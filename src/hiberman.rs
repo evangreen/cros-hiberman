@@ -27,7 +27,7 @@ mod sysfs;
 
 pub use hiberutil::{HibernateOptions, ResumeOptions};
 
-use hiberutil::Result;
+use anyhow::Result;
 use resume::ResumeConductor;
 use suspend::SuspendConductor;
 

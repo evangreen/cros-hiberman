@@ -8,7 +8,9 @@
 
 use libc::c_void;
 
-use crate::hiberutil::{get_page_size, HibernateError, Result};
+use anyhow::{Context, Result};
+
+use crate::hiberutil::{get_page_size, HibernateError};
 
 pub struct MmapBuffer {
     data: *mut u8,
@@ -30,6 +32,7 @@ impl MmapBuffer {
 
         if r == libc::MAP_FAILED {
             Err(HibernateError::MmapError(sys_util::Error::last()))
+                .context("Cannot create MmapBuffer")
         } else {
             Ok(Self {
                 data: r as *mut u8,

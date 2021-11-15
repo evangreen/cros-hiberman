@@ -8,12 +8,13 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use anyhow::{Context as AnyhowContext, Result};
 use dbus::blocking::Connection;
 use dbus::channel::MatchingReceiver;
 use dbus::message::MatchRule;
 use dbus_crossroads::{Context, Crossroads};
 
-use crate::hiberutil::{HibernateError, Result};
+use crate::hiberutil::HibernateError;
 use crate::{debug, error, info};
 
 /// Define the minimum acceptable seed material length.
@@ -67,22 +68,9 @@ impl HiberDbusConnectionInternal {
     /// HibernateSeedInterface here as well.
     pub fn new() -> Result<Self> {
         info!("Setting up dbus");
-        let conn = match Connection::new_system() {
-            Ok(c) => c,
-            Err(e) => {
-                return Err(HibernateError::DbusError(format!(
-                    "Failed to start local dbus-connection: {}",
-                    e
-                )))
-            }
-        };
-
-        if let Err(e) = conn.request_name("org.chromium.Hibernate", false, false, false) {
-            return Err(HibernateError::DbusError(format!(
-                "Failed to register handler: {}",
-                e
-            )));
-        }
+        let conn = Connection::new_system().context("Failed to start local dbus connection")?;
+        conn.request_name("org.chromium.Hibernate", false, false, false)
+            .context("Failed to request dbus name")?;
 
         let mut crossroads = Crossroads::new();
         // Build a new HibernateSeedInterface.
@@ -131,13 +119,9 @@ impl HiberDbusConnectionInternal {
     pub fn receive_seed(&mut self) -> Result<()> {
         info!("Looping to receive seed");
         loop {
-            if let Err(e) = self.conn.process(Duration::from_millis(30000)) {
-                return Err(HibernateError::DbusError(format!(
-                    "Failed to process: {}",
-                    e
-                )));
-            }
-
+            self.conn
+                .process(Duration::from_millis(30000))
+                .context("Failed to process")?;
             let HibernateDbusState(state) = &self.state;
             let state = state.lock().unwrap();
             if state.call_count > 0 {
@@ -200,7 +184,8 @@ impl HiberDbusConnection {
             return Err(HibernateError::DbusError(format!(
                 "Seed size {} was below minium {}",
                 length, MINIMUM_SEED_SIZE
-            )));
+            )))
+            .context("Failed to receive seed");
         }
 
         info!("Got {} bytes of seed material", length);

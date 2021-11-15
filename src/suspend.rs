@@ -9,6 +9,8 @@ use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
+use anyhow::{Context, Result};
+
 use crate::cookie::set_hibernate_cookie;
 use crate::crypto::CryptoWriter;
 use crate::diskfile::{BouncedDiskFile, DiskFile};
@@ -23,7 +25,7 @@ use crate::hibermeta::{
 use crate::hiberutil::HibernateOptions;
 use crate::hiberutil::{
     get_page_size, lock_process_memory, path_to_stateful_block, unlock_process_memory,
-    HibernateError, Result, BUFFER_PAGES,
+    HibernateError, BUFFER_PAGES,
 };
 use crate::imagemover::ImageMover;
 use crate::keyman::HibernateKeyManager;
@@ -262,7 +264,8 @@ impl SuspendConductor {
         };
 
         if rc < 0 {
-            return Err(HibernateError::StatvfsError(sys_util::Error::last()));
+            return Err(HibernateError::StatvfsError(sys_util::Error::last()))
+                .context("Failed to get FS stats");
         }
 
         Ok(stats)

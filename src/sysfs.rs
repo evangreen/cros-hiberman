@@ -7,7 +7,8 @@
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 
-use crate::hiberutil::{HibernateError, Result};
+use anyhow::{Context, Result};
+
 use crate::{debug, warn};
 
 const SWAPPINESS_PATH: &str = "/proc/sys/vm/swappiness";
@@ -27,7 +28,7 @@ impl Swappiness {
             .read(true)
             .write(true)
             .open(SWAPPINESS_PATH)
-            .map_err(|e| HibernateError::OpenFileError(SWAPPINESS_PATH.to_string(), e))?;
+            .context("Failed to open swappiness file")?;
 
         let swappiness = Self::read_swappiness(&mut file)?;
         debug!("Saved original swappiness: {}", swappiness);
@@ -38,11 +39,9 @@ impl Swappiness {
     pub fn set_swappiness(&mut self, value: i32) -> Result<()> {
         self.file
             .seek(SeekFrom::Start(0))
-            .map_err(|e| HibernateError::FileIoError("Failed to seek".to_string(), e))?;
+            .context("Failed to seek swappiness file")?;
 
-        writeln!(self.file, "{}", value)
-            .map_err(|e| HibernateError::FileIoError("Failed to write".to_string(), e))?;
-
+        writeln!(self.file, "{}", value).context("Failed to write swappiness")?;
         Ok(())
     }
 
@@ -50,12 +49,12 @@ impl Swappiness {
     fn read_swappiness(file: &mut File) -> Result<i32> {
         let mut s = String::with_capacity(10);
         file.seek(SeekFrom::Start(0))
-            .map_err(|e| HibernateError::FileIoError("Failed to seek".to_string(), e))?;
+            .context("Failed to seek swappiness file")?;
         file.read_to_string(&mut s)
-            .map_err(|e| HibernateError::FileIoError("Failed to read".to_string(), e))?;
+            .context("Failed to read swappiness file")?;
         s.trim()
             .parse::<i32>()
-            .map_err(|_| HibernateError::SwappinessError(format!("Unexpected value: {}", s)))
+            .context("Failed to convert swappiness file to int")
     }
 }
 

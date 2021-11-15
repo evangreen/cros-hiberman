@@ -10,9 +10,9 @@ use std::collections::LinkedList;
 use std::convert::TryInto;
 use std::io::{Error as IoError, ErrorKind, IoSliceMut, Read};
 
-use crate::hiberutil::{
-    get_available_pages, get_page_size, get_total_memory_pages, HibernateError, Result,
-};
+use anyhow::{Context, Result};
+
+use crate::hiberutil::{get_available_pages, get_page_size, get_total_memory_pages};
 use crate::mmapbuf::MmapBuffer;
 use crate::{debug, info, warn};
 
@@ -180,7 +180,7 @@ impl ImageChunk {
         let mut slice_mut = [IoSliceMut::new(&mut buffer_slice[..size])];
         let bytes_read = source
             .read_vectored(&mut slice_mut)
-            .map_err(|e| HibernateError::FileIoError("Failed to read".to_string(), e))?;
+            .context("Failed to read image chunk")?;
         if bytes_read < size {
             warn!("Only Read {}/{}", bytes_read, size);
         }

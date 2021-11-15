@@ -9,7 +9,9 @@ use std::io::{IoSlice, IoSliceMut, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
-use crate::hiberutil::{path_to_stateful_block, HibernateError, Result};
+use anyhow::{bail, Context, Result};
+
+use crate::hiberutil::{path_to_stateful_block, HibernateError};
 use crate::mmapbuf::MmapBuffer;
 
 /// The hibernate cookie is a flag stored at a known location on disk. The early
@@ -66,7 +68,7 @@ impl HibernateCookie {
             .write(true)
             .custom_flags(libc::O_DIRECT | libc::O_SYNC)
             .open(path)
-            .map_err(|e| HibernateError::OpenFileError(path.display().to_string(), e))?;
+            .context("Failed to open hibernate cookie")?;
 
         let buffer = MmapBuffer::new(HIBERNATE_COOKIE_READ_SIZE)?;
         Ok(HibernateCookie { blockdev, buffer })
@@ -78,7 +80,7 @@ impl HibernateCookie {
     pub fn read(&mut self) -> Result<bool> {
         self.blockdev
             .seek(SeekFrom::Start(0))
-            .map_err(|e| HibernateError::FileIoError("Failed to seek".to_string(), e))?;
+            .context("Failed to seek in hibernate cookie")?;
         let buffer_slice = self.buffer.u8_slice_mut();
         let mut slice_mut = [IoSliceMut::new(
             &mut buffer_slice[..HIBERNATE_COOKIE_READ_SIZE],
@@ -86,12 +88,9 @@ impl HibernateCookie {
         let bytes_read = self
             .blockdev
             .read_vectored(&mut slice_mut)
-            .map_err(|e| HibernateError::FileIoError("Failed to read".to_string(), e))?;
+            .context("Failed to read hibernate cookie")?;
         if bytes_read < HIBERNATE_COOKIE_READ_SIZE {
-            return Err(HibernateError::CookieError(format!(
-                "Only read {:x?} bytes",
-                bytes_read
-            )));
+            bail!("Only read {:x?} cookie bytes", bytes_read);
         }
 
         // Verify there's a GPT header magic where there should be one.
@@ -108,7 +107,8 @@ impl HibernateCookie {
             return Err(HibernateError::CookieError(format!(
                 "GPT magic not found: {:x?}",
                 gpt_sig
-            )));
+            )))
+            .context("Failed to verify GPT magic");
         }
 
         let magic_start = HIBERNATE_MAGIC_OFFSET;
@@ -126,7 +126,7 @@ impl HibernateCookie {
         let existing = self.read()?;
         self.blockdev
             .seek(SeekFrom::Start(0))
-            .map_err(|e| HibernateError::FileIoError("Failed to seek".to_string(), e))?;
+            .context("Failed to seek hibernate cookie")?;
         if valid == existing {
             return Ok(());
         }
@@ -145,22 +145,19 @@ impl HibernateCookie {
         let bytes_written = self
             .blockdev
             .write_vectored(&slice)
-            .map_err(|e| HibernateError::FileIoError("Failed to write".to_string(), e))?;
+            .context("Failed to write hibernate cookie")?;
 
         if bytes_written < HIBERNATE_COOKIE_WRITE_SIZE {
-            return Err(HibernateError::CookieError(format!(
-                "Only wrote {:x?} bytes",
-                bytes_written
-            )));
+            bail!("Wrote only {:x?} hibernate cookie bytes", bytes_written);
         }
 
         self.blockdev
             .flush()
-            .map_err(|e| HibernateError::FileIoError("Failed to flush".to_string(), e))?;
+            .context("Failed to flush hibernate cookie")?;
 
         self.blockdev
             .sync_all()
-            .map_err(|e| HibernateError::FileIoError("Failed to sync".to_string(), e))?;
+            .context("Failed to sync hibernate cookie")?;
         Ok(())
     }
 }

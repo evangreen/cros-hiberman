@@ -8,9 +8,9 @@
 
 use std::io::{IoSliceMut, Read, Write};
 
+use anyhow::{Context, Result};
 use libc::{self, loff_t};
 
-use crate::hiberutil::{HibernateError, Result};
 use crate::mmapbuf::MmapBuffer;
 use crate::{debug, error, info, warn};
 
@@ -98,10 +98,8 @@ impl<'a> ImageMover<'a> {
                         self.bytes_done,
                         self.source_size
                     );
-                    return Err(HibernateError::FileIoError(
-                        "Failed to write".to_string(),
-                        e,
-                    ));
+
+                    return Err(e).context("Failed to flush ImageMover buffer");
                 }
             };
 
@@ -144,7 +142,7 @@ impl<'a> ImageMover<'a> {
         let bytes_read = self
             .source_file
             .read_vectored(&mut slice_mut)
-            .map_err(|e| HibernateError::FileIoError("Failed to read".to_string(), e))?;
+            .context("Failed to move image chunk")?;
         if bytes_read < length {
             warn!(
                 "Only Read {}/{}, {}/{}",

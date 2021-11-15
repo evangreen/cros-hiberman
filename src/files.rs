@@ -8,8 +8,10 @@ use std::fs::{create_dir, File, OpenOptions};
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 
+use anyhow::{Context, Result};
+
 use crate::diskfile::{BouncedDiskFile, DiskFile};
-use crate::hiberutil::{get_page_size, get_total_memory_pages, HibernateError, Result};
+use crate::hiberutil::{get_page_size, get_total_memory_pages, HibernateError};
 use crate::splitter::HIBER_HEADER_MAX_SIZE;
 use crate::{debug, info};
 
@@ -34,12 +36,7 @@ const HIBER_LOG_SIZE: i64 = 1024 * 1024 * 4;
 pub fn create_hibernate_dir() -> Result<()> {
     if !Path::new(HIBERNATE_DIR).exists() {
         debug!("Creating hibernate directory");
-        if let Err(e) = create_dir(HIBERNATE_DIR) {
-            return Err(HibernateError::CreateDirectoryError(
-                HIBERNATE_DIR.to_string(),
-                e,
-            ));
-        }
+        create_dir(HIBERNATE_DIR).context("Failed to create hibernate directory")?;
     }
 
     Ok(())
@@ -97,7 +94,7 @@ pub fn open_bounced_disk_file(path: &Path) -> Result<BouncedDiskFile> {
         .read(true)
         .write(true)
         .open(path)
-        .map_err(|e| HibernateError::OpenFileError(path.display().to_string(), e))?;
+        .context("Cannot open bounced disk file")?;
     BouncedDiskFile::new(&mut file, None)
 }
 
@@ -153,12 +150,13 @@ fn preallocate_file(path: &Path, size: i64) -> Result<File> {
         .write(true)
         .create(true)
         .open(path)
-        .map_err(|e| HibernateError::OpenFileError(path.display().to_string(), e))?;
+        .context("Failed to preallocate hibernate file")?;
 
     let rc = unsafe { libc::fallocate(file.as_raw_fd(), 0, 0, size) as isize };
 
     if rc < 0 {
-        return Err(HibernateError::FallocateError(sys_util::Error::last()));
+        return Err(HibernateError::FallocateError(sys_util::Error::last()))
+            .context("Failed to preallocate via fallocate");
     }
 
     Ok(file)
@@ -170,6 +168,6 @@ fn open_disk_file(path: &Path) -> Result<DiskFile> {
         .read(true)
         .write(true)
         .open(path)
-        .map_err(|e| HibernateError::OpenFileError(path.display().to_string(), e))?;
+        .context("Failed to open disk file")?;
     DiskFile::new(&mut file, None)
 }

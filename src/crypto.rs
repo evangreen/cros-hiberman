@@ -6,10 +6,10 @@
 
 use std::io::{IoSlice, IoSliceMut, Read, Write};
 
+use anyhow::{Context, Result};
 use openssl::symm::{Cipher, Crypter, Mode};
 
 use crate::hibermeta::{HIBERNATE_DATA_IV_SIZE, HIBERNATE_DATA_KEY_SIZE};
-use crate::hiberutil::Result;
 use crate::mmapbuf::MmapBuffer;
 
 /// Define the size of a symmetric encryption block. If the encryption algorithm
@@ -50,7 +50,8 @@ impl<'a> CryptoWriter<'a> {
         // Pad the buffer not only for alignment, but because Crypter::Update()
         // wants an extra block in the output buffer in case there were
         // leftovers from last time.
-        let buffer = MmapBuffer::new(buffer_size + CRYPTO_BLOCK_SIZE)?;
+        let buffer = MmapBuffer::new(buffer_size + CRYPTO_BLOCK_SIZE)
+            .context("Failed to create staging buffer")?;
         Ok(Self {
             crypter,
             dest_file,
@@ -161,8 +162,9 @@ impl<'a> CryptoReader<'a> {
 
         let mut crypter = Crypter::new(cipher, mode, &key, Some(&iv)).unwrap();
         crypter.pad(false);
-        let buffer = MmapBuffer::new(buffer_size)?;
-        let extra = MmapBuffer::new(buffer_size + CRYPTO_BLOCK_SIZE)?;
+        let buffer = MmapBuffer::new(buffer_size).context("Failed to create staging buffer")?;
+        let extra = MmapBuffer::new(buffer_size + CRYPTO_BLOCK_SIZE)
+            .context("Failed to create extra buffer")?;
         Ok(Self {
             crypter,
             source_file,

@@ -6,6 +6,8 @@
 
 use std::io::{Read, Write};
 
+use anyhow::{Context, Result};
+
 use crate::cookie::set_hibernate_cookie;
 use crate::crypto::CryptoReader;
 use crate::dbus::HiberDbusConnection;
@@ -20,7 +22,7 @@ use crate::hibermeta::{
 use crate::hiberutil::ResumeOptions;
 use crate::hiberutil::{
     get_page_size, lock_process_memory, path_to_stateful_block, unlock_process_memory,
-    HibernateError, Result, BUFFER_PAGES,
+    HibernateError, BUFFER_PAGES,
 };
 use crate::imagemover::ImageMover;
 use crate::keyman::HibernateKeyManager;
@@ -101,7 +103,8 @@ impl ResumeConductor {
         if (metadata.flags & HIBERNATE_META_FLAG_VALID) == 0 {
             return Err(HibernateError::MetadataError(
                 "No valid hibernate image".to_string(),
-            ));
+            ))
+            .context("Failed to resume from hibernate");
         }
 
         // Mark that resume was attempted on this image in case it's the last thing
@@ -216,24 +219,17 @@ impl ResumeConductor {
 
             // Also write the first data byte, which is what actually triggers
             // the kernel to do its big allocation.
-            match snap_dev
+            let bytes_written = snap_dev
                 .file
                 .write(std::slice::from_ref(&self.metadata.first_data_byte))
-            {
-                Ok(s) => {
-                    if s != 1 {
-                        return Err(HibernateError::IoSizeError(format!(
-                            "Wrote only {} of 1 byte",
-                            s
-                        )));
-                    }
-                }
-                Err(e) => {
-                    return Err(HibernateError::FileIoError(
-                        "Failed to write one byte to snap dev".to_string(),
-                        e,
-                    ))
-                }
+                .context("Failed to write first byte to snapshot")?;
+
+            if bytes_written != 1 {
+                return Err(HibernateError::IoSizeError(format!(
+                    "Wrote only {} of 1 byte",
+                    bytes_written
+                )))
+                .context("Failed to write first byte to snapshot");
             }
 
             // By now the kernel has done its own allocation for hibernate image
@@ -275,7 +271,8 @@ impl ResumeConductor {
             warn!("Image is not encrypted");
         } else {
             error!("Unencrypted images are not permitted without --unencrypted");
-            return Err(HibernateError::ImageUnencryptedError());
+            return Err(HibernateError::ImageUnencryptedError())
+                .context("Detected unencrypted image without --unencrypted");
         }
 
         // If the preloader was used, then the first data byte was already sent
@@ -314,12 +311,14 @@ impl ResumeConductor {
                 "Metadata had {} pages, but {} were loaded",
                 metadata.pagemap_pages, header_pages
             );
-            return Err(HibernateError::HeaderContentLengthMismatch());
+            return Err(HibernateError::HeaderContentLengthMismatch())
+                .context("Failed to load verify header pages");
         }
 
         if metadata.header_hash != header_hash {
             error!("Metadata header hash mismatch");
-            return Err(HibernateError::HeaderContentHashMismatch());
+            return Err(HibernateError::HeaderContentHashMismatch())
+                .context("Failed to load verify resume header pages");
         }
 
         Ok(())
@@ -364,18 +363,20 @@ impl ResumeConductor {
         // Get the whole page from the source, including the first byte.
         let bytes_read = source
             .read(&mut buf[..])
-            .map_err(|e| HibernateError::FileIoError("Failed to read".to_string(), e))?;
+            .context("Failed to read partial first page")?;
         if bytes_read != page_size {
             return Err(HibernateError::IoSizeError(format!(
                 "Read only {} of {} byte",
                 bytes_read, page_size
-            )));
+            )))
+            .context("Failed to read first partial page");
         }
 
         if buf[0] != self.metadata.first_data_byte {
             // Print an error, but don't print the right answer.
             error!("First data byte of {:x} was incorrect", buf[0]);
-            return Err(HibernateError::FirstDataByteMismatch());
+            return Err(HibernateError::FirstDataByteMismatch())
+                .context("Failed to read first partial page");
         }
 
         // Now write most of the page.
@@ -385,14 +386,15 @@ impl ResumeConductor {
             .unwrap()
             .file
             .write(&buf[1..])
-            .map_err(|e| HibernateError::FileIoError("Failed to write".to_string(), e))?;
+            .context("Failed to write first partial page")?;
 
         if bytes_written != page_size - 1 {
             return Err(HibernateError::IoSizeError(format!(
                 "Wrote only {} of {} byte",
                 bytes_written,
                 page_size - 1
-            )));
+            )))
+            .context("Failed to write first partial page");
         }
 
         Ok(())
@@ -408,12 +410,7 @@ impl ResumeConductor {
         let mut meta_file = self.meta_file.take().unwrap();
         meta_file.rewind()?;
         metadata.write_to_disk(&mut meta_file)?;
-        if let Err(e) = meta_file.sync_all() {
-            return Err(HibernateError::FileSyncError(
-                "Failed to sync metafile".to_string(),
-                e,
-            ));
-        }
+        meta_file.sync_all().context("Failed to sync metafile")?;
 
         // Jump into the restore image. This resumes execution in the lower
         // portion of suspend_system() on success. Flush and stop the logging

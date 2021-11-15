@@ -10,13 +10,14 @@ use std::str;
 use std::sync::{MutexGuard, Once};
 use std::time::Instant;
 
+use anyhow::{Context, Result};
 use sync::Mutex;
 
 pub use sys_util::syslog::{Facility, Priority};
 
 use crate::diskfile::BouncedDiskFile;
 use crate::files::open_log_file;
-use crate::hiberutil::{HibernateError, Result};
+use crate::hiberutil::HibernateError;
 
 /// Define the path to kmsg, used to send log lines into the kernel buffer in
 /// case a crash occurs.
@@ -41,15 +42,16 @@ fn new_mutex_ptr<T>(inner: T) -> *const Mutex<T> {
 /// signal handlers have been registered. Every call made after the first will have no effect
 /// besides return `Ok` or `Err` appropriately.
 pub fn init() -> Result<()> {
-    let mut err = HibernateError::PoisonedError();
+    let mut err: Result<()> =
+        Err(HibernateError::PoisonedError()).context("Failed to initialize log");
     STATE_ONCE.call_once(|| match Hiberlog::new() {
         // Safe because STATE mutation is guarded by `Once`.
         Ok(state) => unsafe { STATE = new_mutex_ptr(state) },
-        Err(e) => err = e,
+        Err(e) => err = Err(e),
     });
 
     if unsafe { STATE.is_null() } {
-        Err(err)
+        err
     } else {
         Ok(())
     }
@@ -59,7 +61,7 @@ fn lock() -> Result<MutexGuard<'static, Hiberlog>> {
     // Safe because we assume that STATE is always in either a valid or NULL state.
     let state_ptr = unsafe { STATE };
     if state_ptr.is_null() {
-        return Err(HibernateError::LoggerUninitialized());
+        return Err(HibernateError::LoggerUninitialized()).context("Failed to lock logger");
     }
     // Safe because STATE only mutates once and we checked for NULL.
     let state = unsafe { &*state_ptr };
@@ -149,7 +151,7 @@ impl Hiberlog {
             .read(true)
             .write(true)
             .open(KMSG_PATH)
-            .map_err(|e| HibernateError::OpenFileError(KMSG_PATH.to_string(), e))?;
+            .context("Failed to open kernel message logger")?;
         Ok(Hiberlog {
             file: None,
             kmsg,
@@ -372,9 +374,7 @@ pub fn clear_log_file(file: &mut BouncedDiskFile) -> Result<()> {
     let mut buf = [0u8; FLUSH_THRESHOLD];
     buf[0] = b'\n';
     file.rewind()?;
-    file.write(&buf)
-        .map_err(|e| HibernateError::FileIoError("Failed to write".to_string(), e))?;
-
+    file.write(&buf).context("Failed to clear log file")?;
     Ok(())
 }
 

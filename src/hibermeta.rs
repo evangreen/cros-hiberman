@@ -6,11 +6,12 @@
 
 use std::io::{IoSliceMut, Read, Write};
 
+use anyhow::{Context, Result};
 use openssl::symm::{Cipher, Crypter, Mode};
 use sys_util::rand::{rand_bytes, Source};
 
 use crate::diskfile::BouncedDiskFile;
-use crate::hiberutil::{any_as_u8_slice, HibernateError, Result};
+use crate::hiberutil::{any_as_u8_slice, HibernateError};
 
 /// Magic value used to recognize a hibernate metadata struct.
 const HIBERNATE_META_MAGIC: u64 = 0x6174654D72626948;
@@ -178,21 +179,24 @@ impl HibernateMetadata {
             return Err(HibernateError::MetadataError(format!(
                 "Invalid metadata magic: {:x?}, expected {:x?}",
                 pubdata.magic, HIBERNATE_META_MAGIC
-            )));
+            )))
+            .context("Cannot load hibernate metadata");
         }
 
         if pubdata.version != HIBERNATE_META_VERSION {
             return Err(HibernateError::MetadataError(format!(
                 "Invalid public metadata version: {:x?}, expected {:x?}",
                 pubdata.version, HIBERNATE_META_VERSION
-            )));
+            )))
+            .context("Cannot loada hibernate metadata");
         }
 
         if (pubdata.flags & !HIBERNATE_META_VALID_FLAGS) != 0 {
             return Err(HibernateError::MetadataError(format!(
                 "Invalid flags: {:x?}, valid mask {:x?}",
                 pubdata.flags, HIBERNATE_META_VALID_FLAGS
-            )));
+            )))
+            .context("Cannot load hibernate metadata");
         }
 
         Ok(Self {
@@ -218,11 +222,12 @@ impl HibernateMetadata {
         let mut slice = [IoSliceMut::new(&mut buf)];
         let bytes_read = disk_file
             .read_vectored(&mut slice)
-            .map_err(|e| HibernateError::FileIoError("Failed to read".to_string(), e))?;
+            .context("Cannot read hibernate metadata")?;
         if bytes_read < std::mem::size_of::<PublicHibernateMetadata>() {
             return Err(HibernateError::MetadataError(
                 "Read too few bytes".to_string(),
-            ));
+            ))
+            .context("Cannot read hibernate metadata");
         }
 
         // This is safe because the buffer is larger than the structure size, and the types
@@ -247,7 +252,8 @@ impl HibernateMetadata {
         if matches!(self.meta_key, None) {
             return Err(HibernateError::MetadataError(
                 "Cannot load private data without meta key".to_string(),
-            ));
+            ))
+            .context("Cannot load private metadata");
         }
 
         // Decrypt the private data.
@@ -261,22 +267,16 @@ impl HibernateMetadata {
         .unwrap();
         crypter.pad(true);
         let mut private_buf = vec![0u8; HIBERNATE_META_PRIVATE_SIZE + cipher.block_size()];
-        let decrypt_size = match crypter.update(&self.private_blob.unwrap(), &mut private_buf) {
-            Ok(s) => s,
-            Err(e) => {
-                return Err(HibernateError::MetadataError(format!(
-                    "Decryption error: {}",
-                    e
-                )))
-            }
-        };
-
+        let decrypt_size = crypter
+            .update(&self.private_blob.unwrap(), &mut private_buf)
+            .context("Failed to decrypt private data")?;
         if decrypt_size < std::mem::size_of::<PrivateHibernateMetadata>() {
             return Err(HibernateError::MetadataError(format!(
                 "Private metadata was {:x?} bytes, expected at least {:x?}",
                 decrypt_size,
                 std::mem::size_of::<PrivateHibernateMetadata>()
-            )));
+            )))
+            .context("Cannot load private metadata");
         }
 
         // This is safe because we just validated we decrypted the structure
@@ -298,21 +298,24 @@ impl HibernateMetadata {
             return Err(HibernateError::MetadataError(format!(
                 "Invalid private metadata version: {:x?}, expected {:x?}",
                 privdata.version, HIBERNATE_META_VERSION
-            )));
+            )))
+            .context("Cannot apply private metadata");
         }
 
         if self.image_size != privdata.image_size {
             return Err(HibernateError::MetadataError(format!(
                 "Mismatch in public private image size: {:x?} vs {:x?}",
                 privdata.image_size, self.image_size
-            )));
+            )))
+            .context("Cannot apply private metadata");
         }
 
         if self.pagemap_pages != privdata.pagemap_pages {
             return Err(HibernateError::MetadataError(format!(
                 "Mismatch in pagemap count: {:x?} vs {:x?}",
                 privdata.pagemap_pages, self.pagemap_pages
-            )));
+            )))
+            .context("Cannot apply private metadata");
         }
 
         self.header_hash = privdata.header_hash;
@@ -335,7 +338,8 @@ impl HibernateMetadata {
             return Err(HibernateError::MetadataError(format!(
                 "Invalid flags: {:x?}, valid mask {:x?}",
                 self.flags, HIBERNATE_META_VALID_FLAGS
-            )));
+            )))
+            .context("Cannot save hibernate metadata");
         }
 
         assert!(buf.len() >= std::mem::size_of::<PublicHibernateMetadata>());
@@ -351,12 +355,13 @@ impl HibernateMetadata {
 
         let bytes_written = disk_file
             .write(&buf[..])
-            .map_err(|e| HibernateError::FileIoError("Failed to write metadata".to_string(), e))?;
+            .context("Cannot write hibernate metadata")?;
 
         if bytes_written != buf.len() {
             return Err(HibernateError::MetadataError(
                 "Wrote too few bytes".to_string(),
-            ));
+            ))
+            .context("Cannot save hibernate metadata");
         }
 
         Ok(())
@@ -408,7 +413,8 @@ impl HibernateMetadata {
         if matches!(self.meta_key, None) {
             return Err(HibernateError::MetadataError(
                 "Cannot build private metadata without meta key".to_string(),
-            ));
+            ))
+            .context("Cannot build private metadata");
         }
 
         // Encrypt it into the buffer.
@@ -425,24 +431,14 @@ impl HibernateMetadata {
         // encrypter can handle the raw bytes.
         let encrypt_size;
         unsafe {
-            encrypt_size = match crypter.update(any_as_u8_slice(&private_data), &mut buf) {
-                Ok(s) => s,
-                Err(e) => {
-                    return Err(HibernateError::MetadataError(format!(
-                        "Encryption error: {}",
-                        e
-                    )))
-                }
-            };
+            encrypt_size = crypter
+                .update(any_as_u8_slice(&private_data), &mut buf)
+                .context("Cannot encrypt private metadata")?;
         }
 
-        if let Err(e) = crypter.finalize(&mut buf[encrypt_size..]) {
-            return Err(HibernateError::MetadataError(format!(
-                "Encryption error: {}",
-                e
-            )));
-        }
-
+        crypter
+            .finalize(&mut buf[encrypt_size..])
+            .context("Cannot encrypt private metadata")?;
         Ok(buf)
     }
 
@@ -461,10 +457,8 @@ impl HibernateMetadata {
 
     /// Fill a buffer with random bytes, given an open file to /dev/urandom.
     fn fill_random(buf: &mut [u8]) -> Result<()> {
-        if let Err(e) = rand_bytes(buf, Source::Pseudorandom) {
-            return Err(HibernateError::RandomError(e));
-        }
-
+        rand_bytes(buf, Source::Pseudorandom)
+            .context("Cannot get random bytes for hibernate metadata")?;
         Ok(())
     }
 }

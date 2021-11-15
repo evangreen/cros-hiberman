@@ -8,8 +8,10 @@ use std::fs::{File, OpenOptions};
 use std::io::{Error as IoError, ErrorKind, IoSlice, IoSliceMut, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::OpenOptionsExt;
 
+use anyhow::{Context, Result};
+
 use crate::fiemap::{Fiemap, FiemapExtent};
-use crate::hiberutil::{get_page_size, path_to_stateful_part, HibernateError, Result};
+use crate::hiberutil::{get_page_size, path_to_stateful_part};
 use crate::mmapbuf::MmapBuffer;
 use crate::{debug, error};
 
@@ -150,7 +152,7 @@ impl DiskFile {
                     .write(true)
                     .custom_flags(libc::O_DIRECT)
                     .open(&blockdev_path)
-                    .map_err(|e| HibernateError::OpenFileError(blockdev_path, e))?
+                    .context("Failed to open disk file block device")?
             }
             Some(f) => f,
         };
@@ -169,7 +171,7 @@ impl DiskFile {
         // Seek to the start of the file so the current_position is always valid.
         disk_file
             .seek(SeekFrom::Start(0))
-            .map_err(|e| HibernateError::FileIoError("Failed to do initial seek".to_string(), e))?;
+            .context("Failed to do initial seek")?;
 
         Ok(disk_file)
     }
@@ -189,7 +191,7 @@ impl DiskFile {
     /// Convenience method to reset the file position back to the start of the file.
     pub fn rewind(&mut self) -> Result<()> {
         self.seek(SeekFrom::Start(0))
-            .map_err(|e| HibernateError::FileIoError("Failed to seek".to_string(), e))?;
+            .context("Failed to rewind disk file")?;
         Ok(())
     }
 
