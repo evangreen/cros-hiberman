@@ -34,10 +34,6 @@ use crate::{debug, error, info, warn};
 /// The ResumeConductor orchestrates the various individual instruments that
 /// work in concert to resume the system from hibernation.
 pub struct ResumeConductor {
-    header_file: Option<DiskFile>,
-    hiber_file: Option<DiskFile>,
-    meta_file: Option<BouncedDiskFile>,
-    snap_dev: Option<SnapshotDevice>,
     metadata: HibernateMetadata,
     dbus_connection: Option<HiberDbusConnection>,
     key_manager: HibernateKeyManager,
@@ -48,10 +44,6 @@ impl ResumeConductor {
     /// Create a new resume conductor in prepration for an impending resume.
     pub fn new() -> Result<Self> {
         Ok(ResumeConductor {
-            header_file: None,
-            hiber_file: None,
-            meta_file: None,
-            snap_dev: None,
             metadata: HibernateMetadata::new()?,
             dbus_connection: None,
             key_manager: HibernateKeyManager::new(),
@@ -121,17 +113,20 @@ impl ResumeConductor {
         debug!("Opening hiberfile");
         let hiber_file = open_hiberfile()?;
         lock_process_memory()?;
-        self.header_file = Some(open_header_file()?);
-        self.hiber_file = Some(hiber_file);
-        self.meta_file = Some(meta_file);
+        let header_file = open_header_file()?;
         self.metadata = metadata;
-        let result = self.resume_system();
+        let result = self.resume_system(header_file, hiber_file, meta_file);
         unlock_process_memory();
         result
     }
 
     /// Inner helper function to read the resume image and launch it.
-    fn resume_system(&mut self) -> Result<()> {
+    fn resume_system(
+        &mut self,
+        header_file: DiskFile,
+        hiber_file: DiskFile,
+        meta_file: BouncedDiskFile,
+    ) -> Result<()> {
         let mut log_file = open_log_file(HiberlogFile::Resume)?;
         // Don't allow the logfile to log as it creates a deadlock.
         log_file.set_logging(false);
@@ -139,10 +134,8 @@ impl ResumeConductor {
         redirect_log(HiberlogOut::File, Some(Box::new(log_file)));
         let mut snap_dev = SnapshotDevice::new(true)?;
         snap_dev.set_platform_mode(false)?;
-        self.snap_dev = Some(snap_dev);
-        self.read_image()?;
+        self.read_image(header_file, hiber_file, &mut snap_dev)?;
         info!("Freezing userspace");
-        let snap_dev = self.snap_dev.as_mut().unwrap();
         snap_dev.freeze_userspace()?;
         let result = if self.options.dry_run {
             info!("Not launching resume image: in a dry run.");
@@ -152,12 +145,11 @@ impl ResumeConductor {
             redirect_log(HiberlogOut::BufferInMemory, None);
             Ok(())
         } else {
-            self.launch_resume_image()
+            self.launch_resume_image(meta_file, &mut snap_dev)
         };
 
         info!("Unfreezing userspace");
         // Take the snap_dev, unfreeze userspace, and drop it.
-        let mut snap_dev = self.snap_dev.take().unwrap();
         if let Err(e) = snap_dev.unfreeze_userspace() {
             error!("Failed to unfreeze userspace: {}", e);
         }
@@ -166,15 +158,17 @@ impl ResumeConductor {
     }
 
     /// Load the resume image from disk into memory.
-    fn read_image(&mut self) -> Result<()> {
+    fn read_image(
+        &mut self,
+        mut header_file: DiskFile,
+        mut hiber_file: DiskFile,
+        snap_dev: &mut SnapshotDevice,
+    ) -> Result<()> {
         let page_size = get_page_size();
-        let snap_dev = self.snap_dev.as_mut().unwrap();
         let mut image_size = self.metadata.image_size;
         debug!("Resume image is {} bytes", image_size);
         // Create the image joiner, which combines the header file and the data
         // file into one contiguous read stream.
-        let mut hiber_file = self.hiber_file.take().unwrap();
-        let mut header_file = self.header_file.take().unwrap();
         let mut joiner = ImageJoiner::new(&mut header_file, &mut hiber_file);
         let mut mover_source: &mut dyn Read;
 
@@ -278,12 +272,11 @@ impl ResumeConductor {
         // big chunks, to the snapshot dev, which only writes pages.
         if !self.options.no_preloader {
             debug!("Sending in partial page");
-            self.read_first_partial_page(mover_source, page_size)?;
+            self.read_first_partial_page(mover_source, page_size, snap_dev)?;
             image_size -= page_size as u64;
         }
 
         // Fire up the big image pump into the kernel.
-        let snap_dev = self.snap_dev.as_mut().unwrap();
         ImageMover::new(
             mover_source,
             &mut snap_dev.file,
@@ -356,7 +349,12 @@ impl ResumeConductor {
     /// main move. This function sends the rest of the page to get things
     /// realigned, and verifies the contents of the first byte. This keeps the
     /// ImageMover uncomplicated and none the wiser.
-    fn read_first_partial_page(&mut self, source: &mut dyn Read, page_size: usize) -> Result<()> {
+    fn read_first_partial_page(
+        &mut self,
+        source: &mut dyn Read,
+        page_size: usize,
+        snap_dev: &mut SnapshotDevice,
+    ) -> Result<()> {
         let mut buf = vec![0u8; page_size];
         // Get the whole page from the source, including the first byte.
         let bytes_read = source
@@ -378,10 +376,7 @@ impl ResumeConductor {
         }
 
         // Now write most of the page.
-        let bytes_written = self
-            .snap_dev
-            .as_mut()
-            .unwrap()
+        let bytes_written = snap_dev
             .file
             .write(&buf[1..])
             .context("Failed to write first partial page")?;
@@ -399,13 +394,16 @@ impl ResumeConductor {
     }
 
     /// Jump into the already-loaded resume image.
-    fn launch_resume_image(&mut self) -> Result<()> {
+    fn launch_resume_image(
+        &mut self,
+        mut meta_file: BouncedDiskFile,
+        snap_dev: &mut SnapshotDevice,
+    ) -> Result<()> {
         // Clear the valid flag and set the resume flag to indicate this image
         // was resumed into.
         let metadata = &mut self.metadata;
         metadata.flags &= !HIBERNATE_META_FLAG_VALID;
         metadata.flags |= HIBERNATE_META_FLAG_RESUME_LAUNCHED;
-        let mut meta_file = self.meta_file.take().unwrap();
         meta_file.rewind()?;
         metadata.write_to_disk(&mut meta_file)?;
         meta_file.sync_all().context("Failed to sync metafile")?;
@@ -419,7 +417,6 @@ impl ResumeConductor {
         flush_log();
         // Keep logs in memory for now.
         redirect_log(HiberlogOut::BufferInMemory, None);
-        let snap_dev = self.snap_dev.as_mut().unwrap();
         let result = snap_dev.atomic_restore();
         error!("Resume failed");
         // If we are still executing then the resume failed. Mark it as such.

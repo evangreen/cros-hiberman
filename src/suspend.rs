@@ -41,10 +41,6 @@ const LOW_DISK_FREE_THRESHOLD: u64 = 10;
 /// The SuspendConductor weaves a delicate baton to guide us through the
 /// symphony of hibernation.
 pub struct SuspendConductor {
-    header_file: Option<DiskFile>,
-    hiber_file: Option<DiskFile>,
-    meta_file: Option<BouncedDiskFile>,
-    snap_dev: Option<SnapshotDevice>,
     options: HibernateOptions,
     metadata: HibernateMetadata,
 }
@@ -53,10 +49,6 @@ impl SuspendConductor {
     /// Create a new SuspendConductor in preparation for imminent hibernation.
     pub fn new() -> Result<Self> {
         Ok(SuspendConductor {
-            header_file: None,
-            hiber_file: None,
-            meta_file: None,
-            snap_dev: None,
             options: Default::default(),
             metadata: HibernateMetadata::new()?,
         })
@@ -68,9 +60,9 @@ impl SuspendConductor {
     pub fn hibernate(&mut self, options: HibernateOptions) -> Result<()> {
         info!("Beginning hibernate");
         create_hibernate_dir()?;
-        self.header_file = Some(preallocate_header_file()?);
-        self.hiber_file = Some(preallocate_hiberfile()?);
-        self.meta_file = Some(preallocate_metadata_file()?);
+        let header_file = preallocate_header_file()?;
+        let hiber_file = preallocate_hiberfile()?;
+        let meta_file = preallocate_metadata_file()?;
         self.options = options;
 
         // The resume log file needs to be preallocated now before the
@@ -104,7 +96,7 @@ impl SuspendConductor {
             libc::sync();
         }
 
-        let result = self.suspend_system();
+        let result = self.suspend_system(header_file, hiber_file, meta_file);
         unlock_process_memory();
         // Now send any remaining logs and future logs to syslog.
         redirect_log(HiberlogOut::Syslog, None);
@@ -120,15 +112,18 @@ impl SuspendConductor {
     /// Inner helper function to actually take the snapshot, save it to disk,
     /// and shut down. Returns upon a failure to hibernate, or after a
     /// successful hibernation has resumed.
-    fn suspend_system(&mut self) -> Result<()> {
-        self.snap_dev = Some(SnapshotDevice::new(false)?);
+    fn suspend_system(
+        &mut self,
+        header_file: DiskFile,
+        hiber_file: DiskFile,
+        meta_file: BouncedDiskFile,
+    ) -> Result<()> {
+        let mut snap_dev = SnapshotDevice::new(false)?;
         info!("Freezing userspace");
-        let snap_dev = self.snap_dev.as_mut().unwrap();
         snap_dev.freeze_userspace()?;
-        let mut result = self.snapshot_and_save();
+        let mut result = self.snapshot_and_save(header_file, hiber_file, meta_file, &mut snap_dev);
         // Take the snapshot device, and then drop it so that other processes
         // really unfreeze.
-        let mut snap_dev = self.snap_dev.take().unwrap();
         let freeze_result = snap_dev.unfreeze_userspace();
         // Fail an otherwise happy suspend for failing to unfreeze, but don't
         // clobber an earlier error, as this is likely a downstream symptom.
@@ -147,20 +142,22 @@ impl SuspendConductor {
     /// Snapshot the system, write the result to disk, and power down. Returns
     /// upon failure to hibernate, or after a hibernated system has successfully
     /// resumed.
-    fn snapshot_and_save(&mut self) -> Result<()> {
+    fn snapshot_and_save(
+        &mut self,
+        header_file: DiskFile,
+        hiber_file: DiskFile,
+        mut meta_file: BouncedDiskFile,
+        snap_dev: &mut SnapshotDevice,
+    ) -> Result<()> {
         let block_path = path_to_stateful_block()?;
         let dry_run = self.options.dry_run;
-        let snap_dev = self.snap_dev.as_mut().unwrap();
         snap_dev.set_platform_mode(false)?;
         // This is where the suspend path and resume path fork. On success,
         // both halves of these conditions execute, just at different times.
         if snap_dev.atomic_snapshot()? {
             // Suspend path. Everything after this point is invisible to the
             // hibernated kernel.
-            self.write_image()?;
-            // Drop the hiber_file.
-            self.hiber_file.take();
-            let mut meta_file = self.meta_file.take().unwrap();
+            self.write_image(header_file, hiber_file, snap_dev)?;
             meta_file.rewind()?;
             self.metadata.write_to_disk(&mut meta_file)?;
             drop(meta_file);
@@ -180,7 +177,6 @@ impl SuspendConductor {
 
             // Power the thing down.
             if !dry_run {
-                let snap_dev = self.snap_dev.as_mut().unwrap();
                 snap_dev.power_off()?;
                 error!("Returned from power off");
             }
@@ -201,11 +197,15 @@ impl SuspendConductor {
     }
 
     /// Save the snapshot image to disk.
-    fn write_image(&mut self) -> Result<()> {
-        let snap_dev = self.snap_dev.as_mut().unwrap();
+    fn write_image(
+        &mut self,
+        mut header_file: DiskFile,
+        mut hiber_file: DiskFile,
+        snap_dev: &mut SnapshotDevice,
+    ) -> Result<()> {
         let image_size = snap_dev.get_image_size()?;
         let page_size = get_page_size();
-        let mut mover_dest: &mut dyn Write = self.hiber_file.as_mut().unwrap();
+        let mut mover_dest: &mut dyn Write = &mut hiber_file;
         let mut encryptor;
         if !self.options.unencrypted {
             encryptor = CryptoWriter::new(
@@ -223,7 +223,6 @@ impl SuspendConductor {
         }
 
         debug!("Hibernate image is {} bytes", image_size);
-        let mut header_file = self.header_file.take().unwrap();
         let mut splitter = ImageSplitter::new(&mut header_file, mover_dest, &mut self.metadata);
         let mut writer = ImageMover::new(
             &mut snap_dev.file,
