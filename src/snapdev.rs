@@ -11,19 +11,30 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use libc::{self, c_int, c_ulong, c_void, loff_t};
+use sys_util::{ioctl_io_nr, ioctl_ior_nr, ioctl_iow_nr};
 
 use crate::hiberutil::HibernateError;
 
 const SNAPSHOT_PATH: &str = "/dev/snapshot";
 
 // Define snapshot device ioctl numbers.
-const SNAPSHOT_FREEZE: c_ulong = 0x3301;
-const SNAPSHOT_UNFREEZE: c_ulong = 0x3302;
-const SNAPSHOT_ATOMIC_RESTORE: c_ulong = 0x3304;
-const SNAPSHOT_GET_IMAGE_SIZE: c_ulong = 0x8008330e;
-const SNAPSHOT_PLATFORM_SUPPORT: c_ulong = 0x330f;
-const SNAPSHOT_POWER_OFF: c_ulong = 0x3310;
-const SNAPSHOT_CREATE_IMAGE: c_ulong = 0x40043311;
+const SNAPSHOT_IOC_MAGIC: u32 = '3' as u32;
+
+ioctl_io_nr!(SNAPSHOT_FREEZE, SNAPSHOT_IOC_MAGIC, 1);
+ioctl_io_nr!(SNAPSHOT_UNFREEZE, SNAPSHOT_IOC_MAGIC, 2);
+ioctl_io_nr!(SNAPSHOT_ATOMIC_RESTORE, SNAPSHOT_IOC_MAGIC, 4);
+ioctl_ior_nr!(SNAPSHOT_GET_IMAGE_SIZE, SNAPSHOT_IOC_MAGIC, 14, u64);
+ioctl_io_nr!(SNAPSHOT_PLATFORM_SUPPORT, SNAPSHOT_IOC_MAGIC, 15);
+ioctl_io_nr!(SNAPSHOT_POWER_OFF, SNAPSHOT_IOC_MAGIC, 16);
+ioctl_iow_nr!(SNAPSHOT_CREATE_IMAGE, SNAPSHOT_IOC_MAGIC, 17, u32);
+
+const FREEZE: u64 = SNAPSHOT_FREEZE();
+const UNFREEZE: u64 = SNAPSHOT_UNFREEZE();
+const ATOMIC_RESTORE: u64 = SNAPSHOT_ATOMIC_RESTORE();
+const GET_IMAGE_SIZE: u64 = SNAPSHOT_GET_IMAGE_SIZE();
+const PLATFORM_SUPPORT: u64 = SNAPSHOT_PLATFORM_SUPPORT();
+const POWER_OFF: u64 = SNAPSHOT_POWER_OFF();
+const CREATE_IMAGE: u64 = SNAPSHOT_CREATE_IMAGE();
 
 /// The SnapshotDevice is mostly a group of method functions that send ioctls to
 /// an open snapshot device file descriptor.
@@ -63,13 +74,13 @@ impl SnapshotDevice {
 
     /// Freeze userspace, stopping all userspace processes except this one.
     pub fn freeze_userspace(&mut self) -> Result<()> {
-        self.simple_ioctl(SNAPSHOT_FREEZE, "FREEZE")
+        self.simple_ioctl(FREEZE, "FREEZE")
     }
 
     /// Unfreeze userspace, resuming all other previously frozen userspace
     /// processes.
     pub fn unfreeze_userspace(&mut self) -> Result<()> {
-        self.simple_ioctl(SNAPSHOT_UNFREEZE, "UNFREEZE")
+        self.simple_ioctl(UNFREEZE, "UNFREEZE")
     }
 
     /// Ask the kernel to create its hibernate snapshot. Returns a boolean
@@ -80,7 +91,7 @@ impl SnapshotDevice {
     pub fn atomic_snapshot(&mut self) -> Result<bool> {
         let mut in_suspend: c_int = 0;
         self.ioctl(
-            SNAPSHOT_CREATE_IMAGE,
+            CREATE_IMAGE,
             "CREATE_IMAGE",
             &mut in_suspend as *mut c_int as *mut c_void,
         )?;
@@ -90,14 +101,14 @@ impl SnapshotDevice {
     /// Jump into the fully loaded resume image. On success, this does not
     /// return, as it launches into the resumed image.
     pub fn atomic_restore(&mut self) -> Result<()> {
-        self.simple_ioctl(SNAPSHOT_ATOMIC_RESTORE, "ATOMIC_RESTORE")
+        self.simple_ioctl(ATOMIC_RESTORE, "ATOMIC_RESTORE")
     }
 
     /// Return the size of the recently snapshotted hibernate image in bytes.
     pub fn get_image_size(&mut self) -> Result<loff_t> {
         let mut image_size: loff_t = 0;
         self.ioctl(
-            SNAPSHOT_GET_IMAGE_SIZE,
+            GET_IMAGE_SIZE,
             "GET_IMAGE_SIZE",
             &mut image_size as *mut loff_t as *mut c_void,
         )?;
@@ -111,7 +122,7 @@ impl SnapshotDevice {
         // Send the parameter down as a mutable pointer, even though the ioctl
         // will not modify it.
         self.ioctl(
-            SNAPSHOT_PLATFORM_SUPPORT,
+            PLATFORM_SUPPORT,
             "PLATFORM_SUPPORT",
             &mut move_param as *mut c_int as *mut c_void,
         )
@@ -119,7 +130,7 @@ impl SnapshotDevice {
 
     /// Power down the system.
     pub fn power_off(&mut self) -> Result<()> {
-        self.simple_ioctl(SNAPSHOT_POWER_OFF, "POWER_OFF")
+        self.simple_ioctl(POWER_OFF, "POWER_OFF")
     }
 
     /// Helper function to send an ioctl with no parameter and return a result.

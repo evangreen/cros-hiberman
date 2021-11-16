@@ -10,13 +10,15 @@ use std::mem;
 use std::os::unix::io::AsRawFd;
 
 use anyhow::{Context, Result};
-use libc::{c_ulong, c_void};
+use libc::c_void;
+use sys_util::ioctl_iowr_nr;
 
 use crate::hiberutil::{any_as_u8_slice, HibernateError};
 use crate::{debug, error};
 
+ioctl_iowr_nr!(FS_IOC_FIEMAP, 'f' as u32, 11, C_Fiemap);
 /// Define the Linux ioctl number for getting the fiemap.
-static FS_IOC_FIEMAP: c_ulong = 0xc020660b;
+const FIEMAP: u64 = FS_IOC_FIEMAP();
 
 /// The C_Fiemap structure's format is mandated by the FS_IOC_FIEMAP ioctl. See
 /// the linux man pages for details.
@@ -157,7 +159,7 @@ impl Fiemap {
         let rc = unsafe {
             libc::ioctl(
                 source_file.as_raw_fd(),
-                FS_IOC_FIEMAP,
+                FIEMAP,
                 &mut param as *mut C_Fiemap as *mut c_void,
             )
         };
@@ -205,7 +207,7 @@ impl Fiemap {
         let rc = unsafe {
             libc::ioctl(
                 source_file.as_raw_fd(),
-                FS_IOC_FIEMAP,
+                FIEMAP,
                 buffer.as_mut_ptr() as *mut _ as *mut c_void,
             )
         };
