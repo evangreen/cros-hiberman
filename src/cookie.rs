@@ -133,9 +133,10 @@ impl HibernateCookie {
 
         let magic_start = HIBERNATE_MAGIC_OFFSET;
         let magic_end = magic_start + HIBERNATE_MAGIC_SIZE;
-        let cookie = match valid {
-            true => HIBERNATE_MAGIC,
-            false => HIBERNATE_MAGIC_POISON,
+        let cookie = if valid {
+            HIBERNATE_MAGIC
+        } else {
+            HIBERNATE_MAGIC_POISON
         };
 
         let buffer_slice = self.buffer.u8_slice_mut();
@@ -166,16 +167,7 @@ impl HibernateCookie {
 /// set. The optional path parameter contains the path to the disk to examine.
 /// If not supplied, the boot disk will be examined.
 pub fn get_hibernate_cookie(path_str: Option<&String>) -> Result<bool> {
-    let stateful_block;
-    let path = match path_str {
-        None => {
-            stateful_block = path_to_stateful_block()?;
-            Path::new(&stateful_block)
-        }
-        Some(p) => Path::new(p),
-    };
-
-    let mut cookie = HibernateCookie::new(path)?;
+    let mut cookie = open_hibernate_cookie(path_str)?;
     cookie.read()
 }
 
@@ -184,6 +176,11 @@ pub fn get_hibernate_cookie(path_str: Option<&String>) -> Result<bool> {
 /// on disk, since there's a valid resume image. The optional path parameter
 /// contains the path to the disk to examine.
 pub fn set_hibernate_cookie(path_str: Option<&String>, valid: bool) -> Result<()> {
+    let mut cookie = open_hibernate_cookie(path_str)?;
+    cookie.write(valid)
+}
+
+fn open_hibernate_cookie(path_str: Option<&String>) -> Result<HibernateCookie> {
     let stateful_block;
     let path = match path_str {
         None => {
@@ -193,6 +190,5 @@ pub fn set_hibernate_cookie(path_str: Option<&String>, valid: bool) -> Result<()
         Some(p) => Path::new(p),
     };
 
-    let mut cookie = HibernateCookie::new(path)?;
-    cookie.write(valid)
+    HibernateCookie::new(path)
 }

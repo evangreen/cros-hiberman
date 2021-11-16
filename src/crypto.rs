@@ -40,9 +40,10 @@ impl<'a> CryptoWriter<'a> {
         buffer_size: usize,
     ) -> Result<Self> {
         let cipher = Cipher::aes_128_cbc();
-        let mode = match encrypt {
-            true => Mode::Encrypt,
-            false => Mode::Decrypt,
+        let mode = if encrypt {
+            Mode::Encrypt
+        } else {
+            Mode::Decrypt
         };
 
         let mut crypter = Crypter::new(cipher, mode, &key, Some(&iv)).unwrap();
@@ -76,10 +77,7 @@ impl Write for CryptoWriter<'_> {
 
         // Loop converting internal buffer sized chunks.
         while offset < length {
-            let mut size_this_round = self.buffer_size;
-            if size_this_round > (length - offset) {
-                size_this_round = length - offset;
-            }
+            let size_this_round = std::cmp::min(self.buffer_size, length - offset);
 
             // Decrypt or encrypt into the aligned buffer. It's overallocated
             // by a block because the Crypter panics if the output isn't
@@ -155,9 +153,10 @@ impl<'a> CryptoReader<'a> {
         buffer_size: usize,
     ) -> Result<Self> {
         let cipher = Cipher::aes_128_cbc();
-        let mode = match encrypt {
-            true => Mode::Encrypt,
-            false => Mode::Decrypt,
+        let mode = if encrypt {
+            Mode::Encrypt
+        } else {
+            Mode::Decrypt
         };
 
         let mut crypter = Crypter::new(cipher, mode, &key, Some(&iv)).unwrap();
@@ -196,11 +195,8 @@ impl Read for CryptoReader<'_> {
         while offset < length {
             // If there's extra data from before, grab that.
             if self.extra_offset < self.extra_size {
-                let mut extra_size = self.extra_size - self.extra_offset;
-                if extra_size > length - offset {
-                    extra_size = length - offset;
-                }
-
+                let extra_size =
+                    std::cmp::min(self.extra_size - self.extra_offset, length - offset);
                 let dst_end = offset + extra_size;
                 let src_end = self.extra_offset + extra_size;
                 buf[offset..dst_end].copy_from_slice(&extra[self.extra_offset..src_end]);
@@ -211,10 +207,7 @@ impl Read for CryptoReader<'_> {
 
             // Fill the source buffer, but not more than the caller wants, since
             // we're trying to minimize copies into the extra buffer.
-            let mut size_this_round = self.buffer_size;
-            if size_this_round > (length - offset) {
-                size_this_round = length - offset;
-            }
+            let size_this_round = std::cmp::min(self.buffer_size, length - offset);
 
             assert!((size_this_round % CRYPTO_BLOCK_SIZE) == 0);
 

@@ -57,10 +57,7 @@ impl Read for BouncedDiskFile {
         let mut offset = 0usize;
         let length = buf.len();
         while offset < length {
-            let mut size_this_round = self.buffer.len();
-            if size_this_round > (length - offset) {
-                size_this_round = length - offset;
-            }
+            let size_this_round = std::cmp::min(self.buffer.len(), length - offset);
 
             // Read into the aligned buffer.
             let src_end = size_this_round;
@@ -86,10 +83,7 @@ impl Write for BouncedDiskFile {
         let mut offset = 0usize;
         let length = buf.len();
         while offset < length {
-            let mut size_this_round = self.buffer.len();
-            if size_this_round > (length - offset) {
-                size_this_round = length - offset;
-            }
+            let size_this_round = std::cmp::min(self.buffer.len(), length - offset);
 
             // Copy into the aligned buffer.
             let src_end = offset + size_this_round;
@@ -242,10 +236,7 @@ impl Read for DiskFile {
             // Get the size remaining to be read or written in this extent.
             let extent_remaining = self.current_extent.fe_length - delta;
             // Get the minimum of the remaining input buffer or the remaining extent.
-            let mut this_io_length = length - offset;
-            if this_io_length as u64 > extent_remaining {
-                this_io_length = extent_remaining as usize;
-            }
+            let this_io_length = std::cmp::min((length - offset) as u64, extent_remaining) as usize;
 
             // Get a slice of the portion of the buffer to be read into, and read from
             // the block device into the slice.
@@ -287,10 +278,7 @@ impl Write for DiskFile {
             // Get the size remaining to be read or written in this extent.
             let extent_remaining = self.current_extent.fe_length - delta;
             // Get the minimum of the remaining input buffer or the remaining extent.
-            let mut this_io_length = length - offset;
-            if this_io_length as u64 > extent_remaining {
-                this_io_length = extent_remaining as usize;
-            }
+            let this_io_length = std::cmp::min((length - offset) as u64, extent_remaining) as usize;
 
             // Get a slice of the portion of the buffer to be read into, and read from
             // the block device into the slice.

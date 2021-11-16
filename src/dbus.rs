@@ -22,19 +22,13 @@ const MINIMUM_SEED_SIZE: usize = 32;
 
 /// Define the context shared between dbus calls. These must all have the Send
 /// trait.
+#[derive(Default)]
 struct HibernateDbusStateInternal {
     call_count: u32,
     seed_material: Vec<u8>,
 }
 
 impl HibernateDbusStateInternal {
-    fn new() -> Self {
-        HibernateDbusStateInternal {
-            call_count: 0,
-            seed_material: vec![],
-        }
-    }
-
     /// D-bus method called by cryptohome to set secret seed material derived
     /// from user authentication.
     fn set_seed_material(&mut self, seed: &[u8]) {
@@ -51,7 +45,7 @@ struct HibernateDbusState(Arc<Mutex<HibernateDbusStateInternal>>);
 
 impl HibernateDbusState {
     fn new() -> Self {
-        HibernateDbusState(Arc::new(Mutex::new(HibernateDbusStateInternal::new())))
+        HibernateDbusState(Arc::new(Mutex::new(HibernateDbusStateInternal::default())))
     }
 }
 

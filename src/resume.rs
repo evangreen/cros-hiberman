@@ -13,7 +13,7 @@ use crate::crypto::CryptoReader;
 use crate::dbus::HiberDbusConnection;
 use crate::diskfile::{BouncedDiskFile, DiskFile};
 use crate::files::{open_header_file, open_hiberfile, open_log_file, open_metafile};
-use crate::hiberlog::{flush_log, redirect_log, replay_logs, HiberlogOut};
+use crate::hiberlog::{flush_log, redirect_log, replay_logs, HiberlogFile, HiberlogOut};
 use crate::hibermeta::{
     HibernateMetadata, HIBERNATE_HASH_SIZE, HIBERNATE_META_FLAG_ENCRYPTED,
     HIBERNATE_META_FLAG_RESUME_FAILED, HIBERNATE_META_FLAG_RESUME_LAUNCHED,
@@ -70,7 +70,7 @@ impl ResumeConductor {
         self.dbus_connection.as_mut().unwrap().spawn_dbus_server()?;
         // Start keeping logs in memory, anticipating success.
         redirect_log(HiberlogOut::BufferInMemory, None);
-        let mut result = self.resume_inner();
+        let result = self.resume_inner();
         // Replay earlier logs first. Don't wipe the logs out if this is just a dry
         // run.
         replay_logs(true, !self.options.dry_run);
@@ -80,12 +80,10 @@ impl ResumeConductor {
         // cryptohome and save the public portion for a later hibernate.
         if !self.options.test_keys {
             let save_result = self.save_public_key();
-            if matches!(result, Ok(())) {
-                result = save_result;
-            }
+            result.and(save_result)
+        } else {
+            result
         }
-
-        result
     }
 
     /// Helper function to perform the meat of the resume action now that the
@@ -134,7 +132,7 @@ impl ResumeConductor {
 
     /// Inner helper function to read the resume image and launch it.
     fn resume_system(&mut self) -> Result<()> {
-        let mut log_file = open_log_file(false)?;
+        let mut log_file = open_log_file(HiberlogFile::Resume)?;
         // Don't allow the logfile to log as it creates a deadlock.
         log_file.set_logging(false);
         // Start logging to the resume logger.

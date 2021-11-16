@@ -109,7 +109,7 @@ impl<'a> ImageSplitter<'a> {
         if self.pages_done == 0 {
             assert!(self.meta_pages == 0);
 
-            self.meta_pages = read_header_page(buf, page_size)?;
+            self.meta_pages = get_meta_page_count(buf, page_size)?;
             // Save the non-data page count in the official metadata too.
             self.metadata.pagemap_pages =
                 self.meta_pages.try_into().expect("Too many metadata pages");
@@ -249,7 +249,7 @@ impl<'a> ImageJoiner<'a> {
             self.hasher.update(&buf[..bytes_read]).unwrap();
             offset += bytes_read;
             self.pages_done += bytes_read / page_size;
-            self.meta_pages = read_header_page(buf, page_size)?;
+            self.meta_pages = get_meta_page_count(buf, page_size)?;
         }
 
         // Read the rest of the header file (or at least the rest of the buffer).
@@ -301,11 +301,11 @@ impl Read for ImageJoiner<'_> {
 
 /// Read the header out of the first page of the hibernate image. Returns the
 /// number of metadata pages on success.
-fn read_header_page(buf: &[u8], page_size: usize) -> std::io::Result<usize> {
+fn get_meta_page_count(buf: &[u8], page_size: usize) -> std::io::Result<usize> {
     assert!(buf.len() >= page_size);
 
-    // This is safe because the buffer is larger than the structure size, and the types
-    // in the struct are all basic.
+    // This is safe because the buffer is larger than the structure size, and
+    // the types in the struct are all basic.
     let header: SwSuspInfo = unsafe {
         std::ptr::read_unaligned(buf[0..std::mem::size_of::<SwSuspInfo>()].as_ptr() as *const _)
     };

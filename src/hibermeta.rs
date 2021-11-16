@@ -249,7 +249,7 @@ impl HibernateMetadata {
     /// Decrypt the private metadata contents via a key set previously by
     /// set_metadata_key(), and populate it into the current object.
     pub fn load_private_data(&mut self) -> Result<()> {
-        if matches!(self.meta_key, None) {
+        if self.meta_key.is_none() {
             return Err(HibernateError::MetadataError(
                 "Cannot load private data without meta key".to_string(),
             ))
@@ -345,10 +345,9 @@ impl HibernateMetadata {
         assert!(buf.len() >= std::mem::size_of::<PublicHibernateMetadata>());
 
         let public_data = self.build_public_data(self.save_private_data)?;
+        // Copy the struct into the beginning of the u8 buffer. This is safe
+        // because the buffer was allocated to be larger than this struct size.
         unsafe {
-            // Copy the struct into the beginning of the u8 buffer. This is safe
-            // because the buffer was allocated to be larger than this struct
-            // size.
             buf[0..std::mem::size_of::<PublicHibernateMetadata>()]
                 .copy_from_slice(any_as_u8_slice(&public_data));
         }
@@ -377,19 +376,22 @@ impl HibernateMetadata {
 
     /// Create the public C struct from the current object contents.
     fn build_public_data(&self, include_private: bool) -> Result<PublicHibernateMetadata> {
-        let private = match include_private {
-            true => self.build_private_buffer()?,
-            false => [0u8; HIBERNATE_META_PRIVATE_SIZE],
+        let private = if include_private {
+            self.build_private_buffer()?
+        } else {
+            [0u8; HIBERNATE_META_PRIVATE_SIZE]
         };
 
-        let private_iv = match include_private {
-            true => self.meta_iv,
-            false => [0u8; HIBERNATE_DATA_IV_SIZE],
+        let private_iv = if include_private {
+            self.meta_iv
+        } else {
+            [0u8; HIBERNATE_DATA_IV_SIZE]
         };
 
-        let meta_eph_public = match include_private {
-            true => self.meta_eph_public,
-            false => [0u8; HIBERNATE_META_KEY_SIZE],
+        let meta_eph_public = if include_private {
+            self.meta_eph_public
+        } else {
+            [0u8; HIBERNATE_META_KEY_SIZE]
         };
 
         Ok(PublicHibernateMetadata {
@@ -410,7 +412,7 @@ impl HibernateMetadata {
         let mut buf = [0u8; HIBERNATE_META_PRIVATE_SIZE];
         let private_data = self.build_private_data();
 
-        if matches!(self.meta_key, None) {
+        if self.meta_key.is_none() {
             return Err(HibernateError::MetadataError(
                 "Cannot build private metadata without meta key".to_string(),
             ))
@@ -427,9 +429,9 @@ impl HibernateMetadata {
         )
         .unwrap();
         crypter.pad(true);
+        let encrypt_size;
         // It's safe to call as_any_u8_slice() with the private data because the
         // encrypter can handle the raw bytes.
-        let encrypt_size;
         unsafe {
             encrypt_size = crypter
                 .update(any_as_u8_slice(&private_data), &mut buf)

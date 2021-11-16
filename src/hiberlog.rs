@@ -50,6 +50,7 @@ pub fn init() -> Result<()> {
         Err(e) => err = Err(e),
     });
 
+    // Safe because STATE mutation is guarded by `Once`.
     if unsafe { STATE.is_null() } {
         err
     } else {
@@ -378,30 +379,36 @@ pub fn clear_log_file(file: &mut BouncedDiskFile) -> Result<()> {
     Ok(())
 }
 
+/// Define the known log file types.
+pub enum HiberlogFile {
+    Suspend,
+    Resume,
+}
+
 /// Replay the suspend (and maybe resume) logs to the syslogger.
 pub fn replay_logs(push_resume_logs: bool, clear: bool) {
     // Push the hibernate logs that were taken after the snapshot (and
     // therefore after syslog became frozen) back into the syslog now.
     // These should be there on both success and failure cases.
-    replay_log(true, clear);
+    replay_log(HiberlogFile::Suspend, clear);
 
     // If successfully resumed from hibernate, or in the bootstrapping kernel
     // after a failed resume attempt, also gather the resume logs
     // saved by the bootstrapping kernel.
     if push_resume_logs {
-        replay_log(false, clear);
+        replay_log(HiberlogFile::Resume, clear);
     }
 }
 
 /// Helper function to replay the suspend or resume log to the syslogger, and
 /// potentially zero out the log as well.
-fn replay_log(suspend_log: bool, clear: bool) {
-    let name = match suspend_log {
-        true => "suspend log",
-        false => "resume log",
+fn replay_log(log_file: HiberlogFile, clear: bool) {
+    let name = match log_file {
+        HiberlogFile::Suspend => "suspend log",
+        HiberlogFile::Resume => "resume log",
     };
 
-    let mut log_file = match open_log_file(suspend_log) {
+    let mut opened_log = match open_log_file(log_file) {
         Ok(f) => f,
         Err(e) => {
             warn!("Failed to open {}: {}", name, e);
@@ -409,9 +416,9 @@ fn replay_log(suspend_log: bool, clear: bool) {
         }
     };
 
-    replay_log_file(&mut log_file, name);
+    replay_log_file(&mut opened_log, name);
     if clear {
-        if let Err(e) = clear_log_file(&mut log_file) {
+        if let Err(e) = clear_log_file(&mut opened_log) {
             warn!("Failed to clear {}: {}", name, e);
         }
     }

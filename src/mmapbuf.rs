@@ -28,6 +28,7 @@ impl MmapBuffer {
         let addr: *const u8 = std::ptr::null();
         let prot = libc::PROT_READ | libc::PROT_WRITE;
         let flags = libc::MAP_PRIVATE | libc::MAP_ANON;
+        // Safe because anonymouse mmap buffers are always returned zeroed.
         let r = unsafe { libc::mmap(addr as *mut c_void, len as libc::size_t, prot, flags, -1, 0) };
 
         if r == libc::MAP_FAILED {
@@ -49,11 +50,13 @@ impl MmapBuffer {
 
     /// Return the buffer contents as an immutable u8 slice.
     pub fn u8_slice(&self) -> &[u8] {
+        // This is safe because the buffer is known to be this large.
         unsafe { std::slice::from_raw_parts(self.data, self.len) }
     }
 
     /// Return the buffer contents as a mutable u8 slice.
     pub fn u8_slice_mut(&mut self) -> &mut [u8] {
+        // This is safe because the buffer is known to be this large.
         unsafe { std::slice::from_raw_parts_mut(self.data, self.len) }
     }
 }
@@ -64,6 +67,8 @@ impl Drop for MmapBuffer {
             return;
         }
 
+        // This is safe because munmap() doesn't do anything other than release
+        // the memory.
         unsafe {
             libc::munmap(self.data as *mut c_void, self.len as libc::size_t);
         }

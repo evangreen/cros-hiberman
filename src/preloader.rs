@@ -50,16 +50,12 @@ impl<'a> ImagePreloader<'a> {
     /// Allocate a new chunk, and fill it with source file material. On success,
     /// returns a boolean indicating if all chunks have been read. The chunk
     /// size is currently hardcoded.
-    pub fn load_chunk(&mut self) -> Result<bool> {
+    pub fn load_next_chunk(&mut self) -> Result<bool> {
         if self.size_loaded >= self.total_size {
             return Ok(true);
         }
 
-        let mut chunk_size = PRELOADER_CHUNK_SIZE;
-        if chunk_size > self.total_size - self.size_loaded {
-            chunk_size = self.total_size - self.size_loaded;
-        }
-
+        let chunk_size = std::cmp::min(PRELOADER_CHUNK_SIZE, self.total_size - self.size_loaded);
         let chunk = ImageChunk::new(self.source, chunk_size)?;
         self.size_loaded += chunk.size;
         if chunk.size == 0 {
@@ -80,7 +76,7 @@ impl<'a> ImagePreloader<'a> {
         );
         loop {
             // Load a chunk, or stop if all chunks are loaded.
-            if self.load_chunk()? {
+            if self.load_next_chunk()? {
                 debug!(
                     "Preloaded entire image, still {} pages available.",
                     get_available_pages()
@@ -111,23 +107,12 @@ impl Read for ImagePreloader<'_> {
             // Load another chunk if the list is empty.
             // Break out if it's the end.
             if self.chunks.is_empty() {
-                match self.load_chunk() {
-                    Ok(finished) => {
-                        if finished {
-                            break;
-                        }
-                    }
+                let finished = self.load_next_chunk().map_err(|e| {
+                    IoError::new(ErrorKind::InvalidInput, format!("I/O error: {}", e))
+                })?;
 
-                    // TODO: Handle this better. The error is either a
-                    // HibernateError from MmapBuffer or a real std::io::Result
-                    // that got converted to a HibernateError. Maybe we should
-                    // return std::io::Result from everything?
-                    Err(e) => {
-                        return Err(IoError::new(
-                            ErrorKind::InvalidInput,
-                            format!("I/O error: {}", e),
-                        ))
-                    }
+                if finished {
+                    break;
                 }
             }
 
@@ -135,11 +120,7 @@ impl Read for ImagePreloader<'_> {
 
             assert!(self.chunk_offset < chunk.size);
 
-            let mut this_io_length = chunk.size - self.chunk_offset;
-            if this_io_length > length - offset {
-                this_io_length = length - offset;
-            }
-
+            let this_io_length = std::cmp::min(chunk.size - self.chunk_offset, length - offset);
             let buffer_slice = chunk.buffer.u8_slice();
             let dst_end = offset + this_io_length;
             let chunk_start = self.chunk_offset;

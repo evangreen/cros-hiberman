@@ -6,8 +6,6 @@
 
 use std::ffi::CString;
 use std::io::Write;
-use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
 
 use anyhow::{Context, Result};
 
@@ -18,7 +16,7 @@ use crate::files::{
     create_hibernate_dir, preallocate_header_file, preallocate_hiberfile, preallocate_log_file,
     preallocate_metadata_file, HIBERNATE_DIR,
 };
-use crate::hiberlog::{flush_log, redirect_log, replay_logs, reset_log, HiberlogOut};
+use crate::hiberlog::{flush_log, redirect_log, replay_logs, reset_log, HiberlogFile, HiberlogOut};
 use crate::hibermeta::{
     HibernateMetadata, HIBERNATE_META_FLAG_ENCRYPTED, HIBERNATE_META_FLAG_VALID,
 };
@@ -77,11 +75,11 @@ impl SuspendConductor {
 
         // The resume log file needs to be preallocated now before the
         // snapshot is taken, though it's not used here.
-        preallocate_log_file(false)?;
-        let mut log_file = preallocate_log_file(true)?;
+        preallocate_log_file(HiberlogFile::Resume)?;
+        let mut log_file = preallocate_log_file(HiberlogFile::Suspend)?;
         // Don't allow the logfile to log as it creates a deadlock.
         log_file.set_logging(false);
-        let fs_stats = Self::get_fs_stats(Path::new(HIBERNATE_DIR))?;
+        let fs_stats = Self::get_fs_stats()?;
         lock_process_memory()?;
         let mut swappiness = Swappiness::new()?;
         swappiness.set_swappiness(SUSPEND_SWAPPINESS)?;
@@ -101,6 +99,7 @@ impl SuspendConductor {
         // logging daemon's about to be frozen.
         redirect_log(HiberlogOut::File, Some(Box::new(log_file)));
         debug!("Syncing filesystems");
+        // This is safe because sync() does not modify memory.
         unsafe {
             libc::sync();
         }
@@ -252,15 +251,17 @@ impl SuspendConductor {
     }
 
     /// Utility function to get the current stateful file system usage.
-    fn get_fs_stats(path: &Path) -> Result<libc::statvfs> {
-        let path_str_c = CString::new(path.as_os_str().as_bytes()).unwrap();
+    fn get_fs_stats() -> Result<libc::statvfs> {
+        let path = CString::new(HIBERNATE_DIR).unwrap();
         let mut stats: libc::statvfs;
 
         let rc = unsafe {
             // It's safe to zero out a new struct.
             stats = std::mem::zeroed();
-            // It's safe to call this libc function with a struct we made ourselves.
-            libc::statvfs(path_str_c.as_ptr(), &mut stats)
+            // It's safe to call this libc function with a struct we made
+            // ourselves. The path is safe because HIBERNATE_DIR contains no nul
+            // bytes.
+            libc::statvfs(path.as_ptr(), &mut stats)
         };
 
         if rc < 0 {

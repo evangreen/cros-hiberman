@@ -11,6 +11,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::diskfile::{BouncedDiskFile, DiskFile};
+use crate::hiberlog::HiberlogFile;
 use crate::hiberutil::{get_page_size, get_total_memory_pages, HibernateError};
 use crate::splitter::HIBER_HEADER_MAX_SIZE;
 use crate::{debug, info};
@@ -50,10 +51,10 @@ pub fn preallocate_metadata_file() -> Result<BouncedDiskFile> {
 }
 
 /// Preallocate and open the suspend or resume log file.
-pub fn preallocate_log_file(suspend: bool) -> Result<BouncedDiskFile> {
-    let name = match suspend {
-        true => SUSPEND_LOG_FILE_NAME,
-        false => RESUME_LOG_FILE_NAME,
+pub fn preallocate_log_file(log_file: HiberlogFile) -> Result<BouncedDiskFile> {
+    let name = match log_file {
+        HiberlogFile::Suspend => SUSPEND_LOG_FILE_NAME,
+        HiberlogFile::Resume => RESUME_LOG_FILE_NAME,
     };
 
     let log_file_path = Path::new(HIBERNATE_DIR).join(name);
@@ -117,10 +118,10 @@ pub fn open_metafile() -> Result<BouncedDiskFile> {
 }
 
 /// Open one of the log files, either the suspend or resume log.
-pub fn open_log_file(suspend: bool) -> Result<BouncedDiskFile> {
-    let name = match suspend {
-        true => SUSPEND_LOG_FILE_NAME,
-        false => RESUME_LOG_FILE_NAME,
+pub fn open_log_file(log_file: HiberlogFile) -> Result<BouncedDiskFile> {
+    let name = match log_file {
+        HiberlogFile::Suspend => SUSPEND_LOG_FILE_NAME,
+        HiberlogFile::Resume => RESUME_LOG_FILE_NAME,
     };
 
     let path = Path::new(HIBERNATE_DIR).join(name);
@@ -152,6 +153,7 @@ fn preallocate_file(path: &Path, size: i64) -> Result<File> {
         .open(path)
         .context("Failed to preallocate hibernate file")?;
 
+    // This is safe because fallocate() doesn't modify memory.
     let rc = unsafe { libc::fallocate(file.as_raw_fd(), 0, 0, size) as isize };
 
     if rc < 0 {

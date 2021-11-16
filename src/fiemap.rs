@@ -33,7 +33,7 @@ struct C_Fiemap {
 /// The FiemapExtent structure's format is mandated by the FS_IOC_FIEMAP ioctl.
 /// See the linux man pages for details.
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default)]
 pub struct FiemapExtent {
     pub fe_logical: u64,
     pub fe_physical: u64,
@@ -96,18 +96,7 @@ impl Fiemap {
     /// for the file at the time this routine was run.
     pub fn new(source_file: &mut File) -> Result<Fiemap> {
         let file_size = source_file.metadata().unwrap().len();
-        let extent_count = Fiemap::get_extent_count(source_file, 0, file_size, FIEMAP_FLAG_SYNC)?;
-        let proto_extent = FiemapExtent {
-            fe_logical: 0,
-            fe_physical: 0,
-            fe_length: 0,
-            fe_reserved64: [0u64, 0u64],
-            fe_flags: 0,
-            fe_reserved: [0u32; 3],
-        };
-
-        let mut extents = vec![proto_extent; extent_count as usize];
-        Fiemap::get_extents(source_file, 0, file_size, FIEMAP_FLAG_SYNC, &mut extents)?;
+        let extents = Fiemap::get_extents(source_file, 0, file_size, FIEMAP_FLAG_SYNC)?;
         debug!("File has {} extents:", extents.len());
         for extent in &extents {
             debug!(
@@ -163,6 +152,8 @@ impl Fiemap {
             fm_reserved: 0,
         };
 
+        // Safe because the param struct has been pre-initialized, uses repr(C),
+        // and contains only basic types.
         let rc = unsafe {
             libc::ioctl(
                 source_file.as_raw_fd(),
@@ -186,8 +177,9 @@ impl Fiemap {
         fm_start: u64,
         fm_length: u64,
         fm_flags: u32,
-        extents: &mut Vec<FiemapExtent>,
-    ) -> Result<()> {
+    ) -> Result<Vec<FiemapExtent>> {
+        let extent_count = Fiemap::get_extent_count(source_file, fm_start, fm_length, fm_flags)?;
+        let mut extents = vec![FiemapExtent::default(); extent_count as usize];
         let fiemap_len = mem::size_of::<C_Fiemap>();
         let extents_len = extents.len() * mem::size_of::<FiemapExtent>();
         let buffer_size = fiemap_len + extents_len;
@@ -250,6 +242,6 @@ impl Fiemap {
             }
         }
 
-        Ok(())
+        Ok(extents)
     }
 }

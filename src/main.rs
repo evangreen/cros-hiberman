@@ -86,34 +86,33 @@ fn hiberman_cookie(args: &mut std::env::Args) -> std::result::Result<(), ()> {
     }
 
     if set_cookie || clear_cookie {
-        match hiberman::cookie::set_hibernate_cookie(path.as_ref(), set_cookie) {
-            Err(e) => {
-                error!("Failed to write hibernate cookie: {}", e);
-                Err(())
-            }
-            Ok(()) => Ok(()),
+        if let Err(e) = hiberman::cookie::set_hibernate_cookie(path.as_ref(), set_cookie) {
+            error!("Failed to write hibernate cookie: {}", e);
+            return Err(());
         }
     } else {
-        match hiberman::cookie::get_hibernate_cookie(path.as_ref()) {
+        let is_set = match hiberman::cookie::get_hibernate_cookie(path.as_ref()) {
+            Ok(s) => s,
             Err(e) => {
                 error!("Failed to get hibernate cookie: {}", e);
-                Err(())
+                return Err(());
             }
-            Ok(is_set) => {
-                if verbose {
-                    match is_set {
-                        true => println!("Hibernate cookie is set"),
-                        false => println!("Hibernate cookie is not set"),
-                    }
-                }
+        };
 
-                match is_set {
-                    true => Ok(()),
-                    false => Err(()),
-                }
+        if verbose {
+            if is_set {
+                println!("Hibernate cookie is set");
+            } else {
+                println!("Hibernate cookie is not set");
             }
         }
+
+        if !is_set {
+            return Err(());
+        }
     }
+
+    Ok(())
 }
 
 fn cat_usage(error: bool, options: &Options) {

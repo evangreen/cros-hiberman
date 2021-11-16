@@ -50,7 +50,7 @@ impl HibernateKeyManager {
     pub fn use_test_keys(&mut self) -> Result<()> {
         warn!("Using test keys: File a bug if you see this in production");
         // Don't clobber already loaded keys.
-        assert!(matches!(self.private_key, None) && matches!(self.public_key, None));
+        assert!(self.private_key.is_none() && self.public_key.is_none());
 
         self.set_private_key(&TEST_KEY_MATERIAL[..])?;
         let public_bytes = self.private_key.as_ref().unwrap().raw_public_key().unwrap();
@@ -68,7 +68,7 @@ impl HibernateKeyManager {
     /// Save the public key to a ramfs file so it can be used later by the
     /// hibernate service.
     pub fn save_public_key(&self) -> Result<()> {
-        if matches!(self.private_key, None) {
+        if self.private_key.is_none() {
             return Err(HibernateError::KeyManagerError(
                 "No public key to save".to_string(),
             ))
@@ -157,7 +157,7 @@ impl HibernateKeyManager {
     /// saved ephemeral public key, and the auth public/private key. The caller
     /// must have previously called set_private_key().
     pub fn install_saved_metadata_key(&mut self, metadata: &mut HibernateMetadata) -> Result<()> {
-        if matches!(self.private_key, None) {
+        if self.private_key.is_none() {
             return Err(HibernateError::KeyManagerError(
                 "Unpopulated private key".to_string(),
             ))

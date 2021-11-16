@@ -49,11 +49,7 @@ impl<'a> ImageMover<'a> {
         // The buffer size is the max of the source or destination chunk size.
         // Both are expected to be powers of two, which means one is always a multiple
         // of the other.
-        let mut buffer_size = source_chunk;
-        if buffer_size < dest_chunk {
-            buffer_size = dest_chunk;
-        }
-
+        let buffer_size = std::cmp::max(source_chunk, dest_chunk);
         let buffer = MmapBuffer::new(buffer_size)?;
         Ok(Self {
             source_file,
@@ -80,11 +76,7 @@ impl<'a> ImageMover<'a> {
         let mut offset: usize = 0;
         while offset < self.buffer_offset {
             // Copy the remainder of the buffer, capped to the destination chunk size.
-            let mut length = self.buffer_offset - offset;
-            if length > self.dest_chunk {
-                length = self.dest_chunk;
-            }
-
+            let length = std::cmp::min(self.buffer_offset - offset, self.dest_chunk);
             let start = offset;
             let end = start + length;
             let buffer_slice = self.buffer.u8_slice();
@@ -125,16 +117,11 @@ impl<'a> ImageMover<'a> {
     fn move_chunk(&mut self) -> Result<()> {
         // Move the whole rest of the image, capped to the source chunk size,
         // and capped to the remaining buffer space.
-        let mut length = self.source_size - self.bytes_done - (self.buffer_offset as i64);
-        if length > self.source_chunk as i64 {
-            length = self.source_chunk as i64;
-        }
-
-        let mut length = length as usize;
-        if length > self.buffer_size - self.buffer_offset {
-            length = self.buffer_size - self.buffer_offset;
-        }
-
+        let length = std::cmp::min(
+            self.source_size - self.bytes_done - (self.buffer_offset as i64),
+            self.source_chunk as i64,
+        );
+        let length = std::cmp::min(length as usize, self.buffer_size - self.buffer_offset);
         let start = self.buffer_offset;
         let end = start + length;
         let buffer_slice = self.buffer.u8_slice_mut();

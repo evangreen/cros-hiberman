@@ -94,22 +94,32 @@ pub struct ResumeOptions {
 }
 
 /// Convert anything to a u8 slice.
+/// # Safety
+///
+/// This function is unsafe because it converts any data into a u8 slice,
+/// without regard for whether or not that data is fully initialized at every
+/// byte (for instance, structure padding). Callers must manually ensure they
+/// pass in pointers that can in fact be represented correctly as a slice of
+/// u8s.
 pub unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
     ::std::slice::from_raw_parts((p as *const T) as *const u8, ::std::mem::size_of::<T>())
 }
 
 /// Get the page size on this system.
 pub fn get_page_size() -> usize {
+    // Safe because sysconf() returns a long and has no other side effects.
     unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize }
 }
 
 /// Get the amount of free memory (in pages) on this system.
 pub fn get_available_pages() -> usize {
+    // Safe because sysconf() returns a long and has no other side effects.
     unsafe { libc::sysconf(libc::_SC_AVPHYS_PAGES) as usize }
 }
 
 /// Get the total amount of memory (in pages) on this system.
 pub fn get_total_memory_pages() -> usize {
+    // Safe because sysconf() returns a long and has no other side effects.
     let pagecount = unsafe { libc::sysconf(libc::_SC_PHYS_PAGES) as usize };
     if pagecount == 0 {
         warn!(
@@ -144,6 +154,8 @@ pub fn path_to_stateful_block() -> Result<String> {
 /// Lock all present and future memory belonging to this process, preventing it
 /// from being paged out.
 pub fn lock_process_memory() -> Result<()> {
+    // This is safe because mlockall() does not modify memory, it only ensures
+    // it doesn't get swapped out, which maintains Rust's safety guarantees.
     let rc = unsafe { libc::mlockall(libc::MCL_CURRENT | libc::MCL_FUTURE) };
 
     if rc < 0 {
@@ -157,6 +169,8 @@ pub fn lock_process_memory() -> Result<()> {
 /// Unlock memory belonging to this process, allowing it to be paged out once
 /// more.
 pub fn unlock_process_memory() {
+    // This is safe because while munlockall() is a foreign function, it has
+    // no immediately observable side effects on program execution.
     unsafe {
         libc::munlockall();
     };
