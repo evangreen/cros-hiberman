@@ -21,13 +21,12 @@ use crate::hibermeta::{
 };
 use crate::hiberutil::ResumeOptions;
 use crate::hiberutil::{
-    get_page_size, lock_process_memory, path_to_stateful_block, unlock_process_memory,
-    HibernateError, BUFFER_PAGES,
+    get_page_size, lock_process_memory, path_to_stateful_block, HibernateError, BUFFER_PAGES,
 };
 use crate::imagemover::ImageMover;
 use crate::keyman::HibernateKeyManager;
 use crate::preloader::ImagePreloader;
-use crate::snapdev::SnapshotDevice;
+use crate::snapdev::{SnapshotDevice, SnapshotMode};
 use crate::splitter::ImageJoiner;
 use crate::{debug, error, info, warn};
 
@@ -112,12 +111,10 @@ impl ResumeConductor {
 
         debug!("Opening hiberfile");
         let hiber_file = open_hiberfile()?;
-        lock_process_memory()?;
+        let _locked_memory = lock_process_memory()?;
         let header_file = open_header_file()?;
         self.metadata = metadata;
-        let result = self.resume_system(header_file, hiber_file, meta_file);
-        unlock_process_memory();
-        result
+        self.resume_system(header_file, hiber_file, meta_file)
     }
 
     /// Inner helper function to read the resume image and launch it.
@@ -132,7 +129,7 @@ impl ResumeConductor {
         log_file.set_logging(false);
         // Start logging to the resume logger.
         redirect_log(HiberlogOut::File, Some(Box::new(log_file)));
-        let mut snap_dev = SnapshotDevice::new(true)?;
+        let mut snap_dev = SnapshotDevice::new(SnapshotMode::Write)?;
         snap_dev.set_platform_mode(false)?;
         self.read_image(header_file, hiber_file, &mut snap_dev)?;
         info!("Freezing userspace");
@@ -295,9 +292,9 @@ impl ResumeConductor {
         // jump into anything but the original header.
         debug!("Validating header content");
         let mut header_hash = [0u8; HIBERNATE_HASH_SIZE];
-        let header_pages = joiner.get_header_hash(&mut header_hash);
+        let header_pages = joiner.get_header_hash(&mut header_hash)?;
         let metadata = &mut self.metadata;
-        if (header_pages == 0) || ((metadata.pagemap_pages as usize) != header_pages) {
+        if (metadata.pagemap_pages as usize) != header_pages {
             error!(
                 "Metadata had {} pages, but {} were loaded",
                 metadata.pagemap_pages, header_pages

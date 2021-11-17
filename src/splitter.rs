@@ -21,11 +21,12 @@
 use std::convert::TryInto;
 use std::io::{Error as IoError, ErrorKind, Read, Write};
 
+use anyhow::{Context, Result};
 use openssl::hash::{Hasher, MessageDigest};
 
 use crate::debug;
 use crate::hibermeta::{HibernateMetadata, HIBERNATE_HASH_SIZE};
-use crate::hiberutil::get_page_size;
+use crate::hiberutil::{get_page_size, HibernateError};
 
 /// A machine with 32GB RAM has 8M PFNs. Half of that times 8 bytes per PFN is
 /// 32MB.
@@ -119,8 +120,6 @@ impl<'a> ImageSplitter<'a> {
         let mut offset = 0;
         if self.pages_done < self.meta_pages {
             // Send either the rest of the metadata or the rest of this buffer.
-            assert!(self.pages_done < self.meta_pages);
-
             let mut meta_size = (self.meta_pages - self.pages_done) * self.page_size;
             if meta_size > length {
                 meta_size = length;
@@ -216,13 +215,14 @@ impl<'a> ImageJoiner<'a> {
     /// Returns the computed hash of the header region, which the caller will
     /// compare to what's in the private metadata (once that's decrypted and
     /// available).
-    pub fn get_header_hash(&self, hash: &mut [u8; HIBERNATE_HASH_SIZE]) -> usize {
+    pub fn get_header_hash(&self, hash: &mut [u8; HIBERNATE_HASH_SIZE]) -> Result<usize> {
         if self.header_hash.len() != HIBERNATE_HASH_SIZE {
-            return 0;
+            return Err(HibernateError::HeaderIncomplete())
+                .context("The header is invalid or has not yet been read");
         }
 
         hash.copy_from_slice(&self.header_hash[..]);
-        self.meta_pages
+        Ok(self.meta_pages)
     }
 
     /// Helper function to read contents from the header file, snarfing out the

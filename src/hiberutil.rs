@@ -38,6 +38,9 @@ pub enum HibernateError {
     /// Header content length mismatch
     #[error("Header content length mismatch")]
     HeaderContentLengthMismatch(),
+    /// Header incomplete
+    #[error("Header incomplete")]
+    HeaderIncomplete(),
     /// Invalid fiemap
     #[error("Invalid fiemap: {0}")]
     InvalidFiemapError(String),
@@ -151,9 +154,18 @@ pub fn path_to_stateful_block() -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+pub struct LockedProcessMemory {}
+
+impl Drop for LockedProcessMemory {
+    fn drop(&mut self) {
+        unlock_process_memory();
+    }
+}
+
 /// Lock all present and future memory belonging to this process, preventing it
-/// from being paged out.
-pub fn lock_process_memory() -> Result<()> {
+/// from being paged out. Returns a LockedProcessMemory token, which undoes the
+/// operation when dropped.
+pub fn lock_process_memory() -> Result<LockedProcessMemory> {
     // This is safe because mlockall() does not modify memory, it only ensures
     // it doesn't get swapped out, which maintains Rust's safety guarantees.
     let rc = unsafe { libc::mlockall(libc::MCL_CURRENT | libc::MCL_FUTURE) };
@@ -163,12 +175,12 @@ pub fn lock_process_memory() -> Result<()> {
             .context("Cannot lock process memory");
     }
 
-    Ok(())
+    Ok(LockedProcessMemory {})
 }
 
 /// Unlock memory belonging to this process, allowing it to be paged out once
 /// more.
-pub fn unlock_process_memory() {
+fn unlock_process_memory() {
     // This is safe because while munlockall() is a foreign function, it has
     // no immediately observable side effects on program execution.
     unsafe {

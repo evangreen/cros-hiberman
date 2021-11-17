@@ -42,9 +42,15 @@ pub struct SnapshotDevice {
     pub file: File,
 }
 
+/// Define the possible modes in which to open the snapshot device.
+pub enum SnapshotMode {
+    Read,
+    Write,
+}
+
 impl SnapshotDevice {
     /// Open the snapshot device and return a new object.
-    pub fn new(open_for_write: bool) -> Result<SnapshotDevice> {
+    pub fn new(mode: SnapshotMode) -> Result<SnapshotDevice> {
         if !Path::new(SNAPSHOT_PATH).exists() {
             return Err(HibernateError::SnapshotError(format!(
                 "Snapshot device {} does not exist",
@@ -63,9 +69,13 @@ impl SnapshotDevice {
             .context("Failed to open snapshot device");
         }
 
-        let file = OpenOptions::new()
-            .read(!open_for_write)
-            .write(open_for_write)
+        let mut file = OpenOptions::new();
+        let file = match mode {
+            SnapshotMode::Read => file.read(true).write(false),
+            SnapshotMode::Write => file.read(false).write(true),
+        };
+
+        let file = file
             .open(SNAPSHOT_PATH)
             .context("Failed to open snapshot device")?;
 

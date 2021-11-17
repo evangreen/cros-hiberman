@@ -124,8 +124,6 @@ impl Fiemap {
 
     /// Return the extent corresponding to the given offset in the file.
     pub fn extent_for_offset(&self, offset: u64) -> Option<&FiemapExtent> {
-        // Binary search would be faster here, but it's not clear if it's worth
-        // that level of fanciness.
         for extent in &self.extents {
             if (extent.fe_logical <= offset) && ((extent.fe_logical + extent.fe_length) > offset) {
                 return Some(extent);

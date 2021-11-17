@@ -444,8 +444,7 @@ fn replay_log_file(file: &mut dyn Read, name: &str) {
     // Now split that big buffer into lines and feed it into the log.
     let len_without_delim = buf.len() - 1;
     let cursor = Cursor::new(&buf[..len_without_delim]);
-    let reader = BufReader::new(cursor);
-    for line in reader.lines() {
+    for line in cursor.lines() {
         let line = match line {
             Ok(l) => l,
             Err(_) => continue,

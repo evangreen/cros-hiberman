@@ -22,12 +22,11 @@ use crate::hibermeta::{
 };
 use crate::hiberutil::HibernateOptions;
 use crate::hiberutil::{
-    get_page_size, lock_process_memory, path_to_stateful_block, unlock_process_memory,
-    HibernateError, BUFFER_PAGES,
+    get_page_size, lock_process_memory, path_to_stateful_block, HibernateError, BUFFER_PAGES,
 };
 use crate::imagemover::ImageMover;
 use crate::keyman::HibernateKeyManager;
-use crate::snapdev::SnapshotDevice;
+use crate::snapdev::{SnapshotDevice, SnapshotMode};
 use crate::splitter::ImageSplitter;
 use crate::sysfs::Swappiness;
 use crate::{debug, error, info, warn};
@@ -72,7 +71,7 @@ impl SuspendConductor {
         // Don't allow the logfile to log as it creates a deadlock.
         log_file.set_logging(false);
         let fs_stats = Self::get_fs_stats()?;
-        lock_process_memory()?;
+        let _locked_memory = lock_process_memory()?;
         let mut swappiness = Swappiness::new()?;
         swappiness.set_swappiness(SUSPEND_SWAPPINESS)?;
         let mut key_manager = HibernateKeyManager::new();
@@ -97,7 +96,6 @@ impl SuspendConductor {
         }
 
         let result = self.suspend_system(header_file, hiber_file, meta_file);
-        unlock_process_memory();
         // Now send any remaining logs and future logs to syslog.
         redirect_log(HiberlogOut::Syslog, None);
         // Replay logs first because they happened earlier.
@@ -118,7 +116,7 @@ impl SuspendConductor {
         hiber_file: DiskFile,
         meta_file: BouncedDiskFile,
     ) -> Result<()> {
-        let mut snap_dev = SnapshotDevice::new(false)?;
+        let mut snap_dev = SnapshotDevice::new(SnapshotMode::Read)?;
         info!("Freezing userspace");
         snap_dev.freeze_userspace()?;
         let mut result = self.snapshot_and_save(header_file, hiber_file, meta_file, &mut snap_dev);

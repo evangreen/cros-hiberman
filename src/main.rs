@@ -58,7 +58,7 @@ fn hiberman_cookie(args: &mut std::env::Args) -> std::result::Result<(), ()> {
     );
     opts.optflag("v", "verbose", "Print more during the command");
     let args: Vec<String> = args.collect();
-    let matches = match opts.parse(&args[..]) {
+    let matches = match opts.parse(args) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("Failed to parse arguments: {}", e);
@@ -131,7 +131,7 @@ fn hiberman_cat(args: &mut std::env::Args) -> std::result::Result<(), ()> {
     opts.optflag("l", "log", "Treat the file(s) as log files");
     opts.optflag("h", "help", "Print this help text");
     let args: Vec<String> = args.collect();
-    let matches = match opts.parse(&args[..]) {
+    let matches = match opts.parse(args) {
         Ok(m) => m,
         Err(e) => {
             error!("Failed to parse arguments: {}", e);
@@ -177,7 +177,7 @@ fn hiberman_hibernate(args: &mut std::env::Args) -> std::result::Result<(), ()> 
     );
     opts.optflag("t", "test-keys", "Use test keys for debugging");
     let args: Vec<String> = args.collect();
-    let matches = match opts.parse(&args[..]) {
+    let matches = match opts.parse(args) {
         Ok(m) => m,
         Err(e) => {
             error!("Failed to parse arguments: {}", e);
@@ -227,7 +227,7 @@ fn hiberman_resume(args: &mut std::env::Args) -> std::result::Result<(), ()> {
     );
     opts.optflag("t", "test-keys", "Use test keys for debugging");
     let args: Vec<String> = args.collect();
-    let matches = match opts.parse(&args[..]) {
+    let matches = match opts.parse(args) {
         Ok(m) => m,
         Err(e) => {
             error!("Failed to parse arguments: {}", e);
