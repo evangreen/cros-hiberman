@@ -88,7 +88,7 @@ impl SuspendConductor {
 
         // Stop logging to syslog, and divert instead to a file since the
         // logging daemon's about to be frozen.
-        redirect_log(HiberlogOut::File, Some(Box::new(log_file)));
+        redirect_log(HiberlogOut::File(Box::new(log_file)));
         debug!("Syncing filesystems");
         // This is safe because sync() does not modify memory.
         unsafe {
@@ -97,7 +97,7 @@ impl SuspendConductor {
 
         let result = self.suspend_system(header_file, hiber_file, meta_file);
         // Now send any remaining logs and future logs to syslog.
-        redirect_log(HiberlogOut::Syslog, None);
+        redirect_log(HiberlogOut::Syslog);
         // Replay logs first because they happened earlier.
         replay_logs(
             result.is_ok() && !self.options.dry_run,
@@ -171,7 +171,7 @@ impl SuspendConductor {
             // Flush out the hibernate log, and instead keep logs in memory.
             // Any logs beyond here are lost upon powerdown.
             flush_log();
-            redirect_log(HiberlogOut::BufferInMemory, None);
+            redirect_log(HiberlogOut::BufferInMemory);
 
             // Power the thing down.
             if !dry_run {
@@ -187,7 +187,7 @@ impl SuspendConductor {
             // stale partial state that the suspend path ultimately flushed and closed.
             // Keep logs in memory for now.
             reset_log();
-            redirect_log(HiberlogOut::BufferInMemory, None);
+            redirect_log(HiberlogOut::BufferInMemory);
             info!("Resumed from hibernate");
         }
 

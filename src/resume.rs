@@ -60,13 +60,13 @@ impl ResumeConductor {
         self.dbus_connection = Some(HiberDbusConnection::new()?);
         self.dbus_connection.as_mut().unwrap().spawn_dbus_server()?;
         // Start keeping logs in memory, anticipating success.
-        redirect_log(HiberlogOut::BufferInMemory, None);
+        redirect_log(HiberlogOut::BufferInMemory);
         let result = self.resume_inner();
         // Replay earlier logs first. Don't wipe the logs out if this is just a dry
         // run.
         replay_logs(true, !self.options.dry_run);
         // Then move pending and future logs to syslog.
-        redirect_log(HiberlogOut::Syslog, None);
+        redirect_log(HiberlogOut::Syslog);
         // Unless the test keys are being used, wait for the key material from
         // cryptohome and save the public portion for a later hibernate.
         if !self.options.test_keys {
@@ -128,7 +128,7 @@ impl ResumeConductor {
         // Don't allow the logfile to log as it creates a deadlock.
         log_file.set_logging(false);
         // Start logging to the resume logger.
-        redirect_log(HiberlogOut::File, Some(Box::new(log_file)));
+        redirect_log(HiberlogOut::File(Box::new(log_file)));
         let mut snap_dev = SnapshotDevice::new(SnapshotMode::Write)?;
         snap_dev.set_platform_mode(false)?;
         self.read_image(header_file, hiber_file, &mut snap_dev)?;
@@ -139,7 +139,7 @@ impl ResumeConductor {
             // Flush the resume file logs.
             flush_log();
             // Keep logs in memory, like launch_resume_image() does.
-            redirect_log(HiberlogOut::BufferInMemory, None);
+            redirect_log(HiberlogOut::BufferInMemory);
             Ok(())
         } else {
             self.launch_resume_image(meta_file, &mut snap_dev)
@@ -413,7 +413,7 @@ impl ResumeConductor {
         // Flush out any pending resume logs, closing out the resume log file.
         flush_log();
         // Keep logs in memory for now.
-        redirect_log(HiberlogOut::BufferInMemory, None);
+        redirect_log(HiberlogOut::BufferInMemory);
         let result = snap_dev.atomic_restore();
         error!("Resume failed");
         // If we are still executing then the resume failed. Mark it as such.

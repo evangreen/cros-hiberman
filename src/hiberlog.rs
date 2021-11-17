@@ -129,12 +129,11 @@ pub enum HiberlogOut {
     /// Push log lines to the syslogger.
     Syslog,
     /// Push log lines to a DiskFile.
-    File,
+    File(Box<dyn Write>),
 }
 
 /// Define the hibernate logger state.
 struct Hiberlog {
-    file: Option<Box<dyn Write>>,
     kmsg: File,
     start: Instant,
     partial: Option<Vec<u8>>,
@@ -154,7 +153,6 @@ impl Hiberlog {
             .open(KMSG_PATH)
             .context("Failed to open kernel message logger")?;
         Ok(Hiberlog {
-            file: None,
             kmsg,
             start: Instant::now(),
             partial: None,
@@ -261,10 +259,9 @@ impl Hiberlog {
             }
         }
 
-        self.file.as_mut().map(|f| {
+        if let HiberlogOut::File(f) = &mut self.out {
             let _ = f.write(&buf[..]);
-            Some(f)
-        });
+        }
 
         self.pending_size -= length;
         self.pending = self.pending[i..].to_vec();
@@ -337,23 +334,24 @@ pub fn log(pri: Priority, fac: Facility, file_line: Option<(&str, u32)>, args: f
 /// Divert the log to a new output. This does not flush or reset the stream, the
 /// caller must decide what they want to do with buffered output before calling
 /// this.
-pub fn redirect_log(out: HiberlogOut, file: Option<Box<dyn Write>>) {
+pub fn redirect_log(out: HiberlogOut) {
     let mut state = lock!();
-    state.file = file;
     state.to_kmsg = false;
-    // Any time we're redirecting to a file, also send to kmsg as a message
-    // in a bottle, in case we never get a chance to replay our own file logs.
-    // This shouldn't produce duplicate messages on success because when we're
-    // logging to a file we're also barrelling towards a kexec or shutdown.
-    if matches!(out, HiberlogOut::File) {
-        state.to_kmsg = true;
+    match out {
+        HiberlogOut::BufferInMemory => {},
+        // If going back to syslog, dump any pending state into syslog.
+        HiberlogOut::Syslog => state.flush_to_syslog(),
+        HiberlogOut::File(_) => {
+            // Any time we're redirecting to a file, also send to kmsg as a
+            // message in a bottle, in case we never get a chance to replay our
+            // own file logs. This shouldn't produce duplicate messages on
+            // success because when we're logging to a file we're also
+            // barrelling towards a kexec or shutdown.
+            state.to_kmsg = true;
+        }
     }
 
     state.out = out;
-    // If going back to syslog, dump any pending state into syslog.
-    if matches!(state.out, HiberlogOut::Syslog) {
-        state.flush_to_syslog();
-    }
 }
 
 /// Discard any buffered but unsent logging data.
