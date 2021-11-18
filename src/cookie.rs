@@ -33,8 +33,8 @@ struct HibernateCookie {
 }
 
 /// Define the size of the region we update.
-const HIBERNATE_COOKIE_READ_SIZE: usize = 0x400;
-const HIBERNATE_COOKIE_WRITE_SIZE: usize = 0x400;
+const COOKIE_READ_SIZE: usize = 0x400;
+const COOKIE_WRITE_SIZE: usize = 0x400;
 /// Define the magic value the GPT stamps down, which we will use to verify
 /// we're writing to an area that we expect. If somehow the world shifted out
 /// from under us, this could prevent us from silently corrupting data.
@@ -45,19 +45,19 @@ const GPT_MAGIC: u64 = 0x5452415020494645; // 'EFI PART'
 /// just for the GPT header. The GPT header is quite small and doesn't use its
 /// whole sector. Define the offset towards the end of the region where the
 /// cookie will be written.
-const HIBERNATE_MAGIC_OFFSET: usize = 0x3E0;
+const COOKIE_MAGIC_OFFSET: usize = 0x3E0;
 /// Define the magic token we write to indicate a valid hibernate partition.
 /// This is both big (as in bigger than a single bit), and points the finger at
 /// an obvious culprit, in the case this does end up unintentionally writing
 /// over important data. This is made arbitrarily, but intentionally, to be 16
 /// bytes.
-const HIBERNATE_MAGIC: &[u8] = b"HibernateCookie!";
+const COOKIE_VALID_VALUE: &[u8] = b"HibernateCookie!";
 /// Define a known "not valid" value as well. This is treated identically to
 /// anything else that is invalid, but again could serve as a more useful
 /// breadcrumb to someone debugging than 16 vanilla zeroes.
-const HIBERNATE_MAGIC_POISON: &[u8] = b"HibernateInvalid";
-/// Define the size of the magic token.
-const HIBERNATE_MAGIC_SIZE: usize = 16;
+const COOKIE_POISON_VALUE: &[u8] = b"HibernateInvalid";
+/// Define the size of the magic token, in bytes.
+const COOKIE_SIZE: usize = 16;
 
 impl HibernateCookie {
     /// Create a new HibernateCookie structure. This allocates resources but
@@ -70,7 +70,7 @@ impl HibernateCookie {
             .open(path)
             .context("Failed to open hibernate cookie")?;
 
-        let buffer = MmapBuffer::new(HIBERNATE_COOKIE_READ_SIZE)?;
+        let buffer = MmapBuffer::new(COOKIE_READ_SIZE)?;
         Ok(HibernateCookie { blockdev, buffer })
     }
 
@@ -82,14 +82,12 @@ impl HibernateCookie {
             .seek(SeekFrom::Start(0))
             .context("Failed to seek in hibernate cookie")?;
         let buffer_slice = self.buffer.u8_slice_mut();
-        let mut slice_mut = [IoSliceMut::new(
-            &mut buffer_slice[..HIBERNATE_COOKIE_READ_SIZE],
-        )];
+        let mut slice_mut = [IoSliceMut::new(&mut buffer_slice[..COOKIE_READ_SIZE])];
         let bytes_read = self
             .blockdev
             .read_vectored(&mut slice_mut)
             .context("Failed to read hibernate cookie")?;
-        if bytes_read < HIBERNATE_COOKIE_READ_SIZE {
+        if bytes_read < COOKIE_READ_SIZE {
             bail!("Only read {:x?} cookie bytes", bytes_read);
         }
 
@@ -111,9 +109,9 @@ impl HibernateCookie {
             .context("Failed to verify GPT magic");
         }
 
-        let magic_start = HIBERNATE_MAGIC_OFFSET;
-        let magic_end = magic_start + HIBERNATE_MAGIC_SIZE;
-        let equal = buffer_slice[magic_start..magic_end] == *HIBERNATE_MAGIC;
+        let magic_start = COOKIE_MAGIC_OFFSET;
+        let magic_end = magic_start + COOKIE_SIZE;
+        let equal = buffer_slice[magic_start..magic_end] == *COOKIE_VALID_VALUE;
         Ok(equal)
     }
 
@@ -131,24 +129,24 @@ impl HibernateCookie {
             return Ok(());
         }
 
-        let magic_start = HIBERNATE_MAGIC_OFFSET;
-        let magic_end = magic_start + HIBERNATE_MAGIC_SIZE;
+        let magic_start = COOKIE_MAGIC_OFFSET;
+        let magic_end = magic_start + COOKIE_SIZE;
         let cookie = if valid {
-            HIBERNATE_MAGIC
+            COOKIE_VALID_VALUE
         } else {
-            HIBERNATE_MAGIC_POISON
+            COOKIE_POISON_VALUE
         };
 
         let buffer_slice = self.buffer.u8_slice_mut();
         buffer_slice[magic_start..magic_end].copy_from_slice(cookie);
-        let end = HIBERNATE_COOKIE_WRITE_SIZE;
+        let end = COOKIE_WRITE_SIZE;
         let slice = [IoSlice::new(&buffer_slice[..end])];
         let bytes_written = self
             .blockdev
             .write_vectored(&slice)
             .context("Failed to write hibernate cookie")?;
 
-        if bytes_written < HIBERNATE_COOKIE_WRITE_SIZE {
+        if bytes_written < COOKIE_WRITE_SIZE {
             bail!("Wrote only {:x?} hibernate cookie bytes", bytes_written);
         }
 

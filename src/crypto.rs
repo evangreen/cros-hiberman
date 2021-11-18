@@ -9,12 +9,12 @@ use std::io::{IoSlice, IoSliceMut, Read, Write};
 use anyhow::{Context, Result};
 use openssl::symm::{Cipher, Crypter, Mode};
 
-use crate::hibermeta::{HIBERNATE_DATA_IV_SIZE, HIBERNATE_DATA_KEY_SIZE};
+use crate::hibermeta::{META_SYMMETRIC_IV_SIZE, META_SYMMETRIC_KEY_SIZE};
 use crate::mmapbuf::MmapBuffer;
 
 /// Define the size of a symmetric encryption block. If the encryption algorithm
 /// is changed, be sure to keep this value in sync.
-const CRYPTO_BLOCK_SIZE: usize = HIBERNATE_DATA_KEY_SIZE;
+const CRYPTO_BLOCK_SIZE: usize = META_SYMMETRIC_KEY_SIZE;
 
 /// The CryptoWriter is an object that can be inserted in the image pipeline on
 /// the "write" side (in other words, somewhere on the destination side of the
@@ -34,8 +34,8 @@ impl<'a> CryptoWriter<'a> {
     /// chunk size that will be passed to the final destination writes.
     pub fn new(
         dest_file: &'a mut dyn Write,
-        key: [u8; HIBERNATE_DATA_KEY_SIZE],
-        iv: [u8; HIBERNATE_DATA_IV_SIZE],
+        key: [u8; META_SYMMETRIC_KEY_SIZE],
+        iv: [u8; META_SYMMETRIC_IV_SIZE],
         encrypt: bool,
         buffer_size: usize,
     ) -> Result<Self> {
@@ -147,8 +147,8 @@ impl<'a> CryptoReader<'a> {
     /// average read size.
     pub fn new(
         source_file: &'a mut dyn Read,
-        key: [u8; HIBERNATE_DATA_KEY_SIZE],
-        iv: [u8; HIBERNATE_DATA_IV_SIZE],
+        key: [u8; META_SYMMETRIC_KEY_SIZE],
+        iv: [u8; META_SYMMETRIC_IV_SIZE],
         encrypt: bool,
         buffer_size: usize,
     ) -> Result<Self> {

@@ -19,9 +19,7 @@ use crate::files::{
     preallocate_metadata_file, HIBERNATE_DIR,
 };
 use crate::hiberlog::{flush_log, redirect_log, replay_logs, reset_log, HiberlogFile, HiberlogOut};
-use crate::hibermeta::{
-    HibernateMetadata, HIBERNATE_META_FLAG_ENCRYPTED, HIBERNATE_META_FLAG_VALID,
-};
+use crate::hibermeta::{HibernateMetadata, META_FLAG_ENCRYPTED, META_FLAG_VALID};
 use crate::hiberutil::HibernateOptions;
 use crate::hiberutil::{get_page_size, lock_process_memory, path_to_stateful_block, BUFFER_PAGES};
 use crate::imagemover::ImageMover;
@@ -214,7 +212,7 @@ impl SuspendConductor {
                 page_size * BUFFER_PAGES,
             )?;
             mover_dest = &mut encryptor;
-            self.metadata.flags |= HIBERNATE_META_FLAG_ENCRYPTED;
+            self.metadata.flags |= META_FLAG_ENCRYPTED;
             debug!("Added encryption");
         } else {
             warn!("Warning: The hibernate image is unencrypted");
@@ -232,7 +230,7 @@ impl SuspendConductor {
         writer.move_all()?;
         info!("Wrote {} MB", image_size / 1024 / 1024);
         self.metadata.image_size = image_size as u64;
-        self.metadata.flags |= HIBERNATE_META_FLAG_VALID;
+        self.metadata.flags |= META_FLAG_VALID;
         Ok(())
     }
 

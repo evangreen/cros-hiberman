@@ -75,7 +75,7 @@ fn hiberman_cookie(args: &mut std::env::Args) -> std::result::Result<(), ()> {
     let clear_cookie = matches.opt_present("c");
     let set_cookie = matches.opt_present("s");
     let verbose = matches.opt_present("v");
-    let path = matches.free.iter().next().cloned();
+    let path = matches.free.get(0).cloned();
 
     // In verbose mode, or for anything other than "get", fire up logging.
     if verbose || set_cookie || clear_cookie {

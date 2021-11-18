@@ -25,7 +25,7 @@ use anyhow::{Context, Result};
 use openssl::hash::{Hasher, MessageDigest};
 
 use crate::debug;
-use crate::hibermeta::{HibernateMetadata, HIBERNATE_HASH_SIZE};
+use crate::hibermeta::{HibernateMetadata, META_HASH_SIZE};
 use crate::hiberutil::{get_page_size, HibernateError};
 
 /// A machine with 32GB RAM has 8M PFNs. Half of that times 8 bytes per PFN is
@@ -215,8 +215,8 @@ impl<'a> ImageJoiner<'a> {
     /// Returns the computed hash of the header region, which the caller will
     /// compare to what's in the private metadata (once that's decrypted and
     /// available).
-    pub fn get_header_hash(&self, hash: &mut [u8; HIBERNATE_HASH_SIZE]) -> Result<usize> {
-        if self.header_hash.len() != HIBERNATE_HASH_SIZE {
+    pub fn get_header_hash(&self, hash: &mut [u8; META_HASH_SIZE]) -> Result<usize> {
+        if self.header_hash.len() != META_HASH_SIZE {
             return Err(HibernateError::HeaderIncomplete())
                 .context("The header is invalid or has not yet been read");
         }

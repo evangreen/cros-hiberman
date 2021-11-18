@@ -16,9 +16,8 @@ use crate::diskfile::{BouncedDiskFile, DiskFile};
 use crate::files::{open_header_file, open_hiberfile, open_log_file, open_metafile};
 use crate::hiberlog::{flush_log, redirect_log, replay_logs, HiberlogFile, HiberlogOut};
 use crate::hibermeta::{
-    HibernateMetadata, HIBERNATE_HASH_SIZE, HIBERNATE_META_FLAG_ENCRYPTED,
-    HIBERNATE_META_FLAG_RESUME_FAILED, HIBERNATE_META_FLAG_RESUME_LAUNCHED,
-    HIBERNATE_META_FLAG_RESUME_STARTED, HIBERNATE_META_FLAG_VALID,
+    HibernateMetadata, META_FLAG_ENCRYPTED, META_FLAG_RESUME_FAILED, META_FLAG_RESUME_LAUNCHED,
+    META_FLAG_RESUME_STARTED, META_FLAG_VALID, META_HASH_SIZE,
 };
 use crate::hiberutil::ResumeOptions;
 use crate::hiberutil::{
@@ -91,7 +90,7 @@ impl ResumeConductor {
         let mut meta_file = open_metafile()?;
         debug!("Loading metadata");
         let mut metadata = HibernateMetadata::load_from_disk(&mut meta_file)?;
-        if (metadata.flags & HIBERNATE_META_FLAG_VALID) == 0 {
+        if (metadata.flags & META_FLAG_VALID) == 0 {
             return Err(HibernateError::MetadataError(
                 "No valid hibernate image".to_string(),
             ))
@@ -104,8 +103,8 @@ impl ResumeConductor {
         // any changes.
         metadata.dont_save_private_data();
         if !self.options.dry_run {
-            metadata.flags &= !HIBERNATE_META_FLAG_VALID;
-            metadata.flags |= HIBERNATE_META_FLAG_RESUME_STARTED;
+            metadata.flags &= !META_FLAG_VALID;
+            metadata.flags |= META_FLAG_RESUME_STARTED;
             debug!("Clearing valid flag on metadata: {:x}", metadata.flags);
             meta_file.rewind()?;
             metadata.write_to_disk(&mut meta_file)?;
@@ -252,7 +251,7 @@ impl ResumeConductor {
         self.key_manager.install_saved_metadata_key(metadata)?;
         metadata.load_private_data()?;
         let mut decryptor;
-        if (metadata.flags & HIBERNATE_META_FLAG_ENCRYPTED) != 0 {
+        if (metadata.flags & META_FLAG_ENCRYPTED) != 0 {
             decryptor = CryptoReader::new(
                 mover_source,
                 metadata.data_key,
@@ -298,7 +297,7 @@ impl ResumeConductor {
         // kernel ensures the pages are RAM). The check here ensures we'll never
         // jump into anything but the original header.
         debug!("Validating header content");
-        let mut header_hash = [0u8; HIBERNATE_HASH_SIZE];
+        let mut header_hash = [0u8; META_HASH_SIZE];
         let header_pages = joiner.get_header_hash(&mut header_hash)?;
         let metadata = &mut self.metadata;
         if (metadata.pagemap_pages as usize) != header_pages {
@@ -406,8 +405,8 @@ impl ResumeConductor {
         // Clear the valid flag and set the resume flag to indicate this image
         // was resumed into.
         let metadata = &mut self.metadata;
-        metadata.flags &= !HIBERNATE_META_FLAG_VALID;
-        metadata.flags |= HIBERNATE_META_FLAG_RESUME_LAUNCHED;
+        metadata.flags &= !META_FLAG_VALID;
+        metadata.flags |= META_FLAG_RESUME_LAUNCHED;
         meta_file.rewind()?;
         metadata.write_to_disk(&mut meta_file)?;
         meta_file.sync_all().context("Failed to sync metafile")?;
@@ -424,7 +423,7 @@ impl ResumeConductor {
         let result = snap_dev.atomic_restore();
         error!("Resume failed");
         // If we are still executing then the resume failed. Mark it as such.
-        metadata.flags |= HIBERNATE_META_FLAG_RESUME_FAILED;
+        metadata.flags |= META_FLAG_RESUME_FAILED;
         meta_file.rewind()?;
         metadata.write_to_disk(&mut meta_file)?;
         result

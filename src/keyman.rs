@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use openssl::derive::Deriver;
 use openssl::pkey::{Id, PKey, Private, Public};
 
-use crate::hibermeta::{HibernateMetadata, HIBERNATE_DATA_KEY_SIZE, HIBERNATE_META_KEY_SIZE};
+use crate::hibermeta::{HibernateMetadata, META_ASYMMETRIC_KEY_SIZE, META_SYMMETRIC_KEY_SIZE};
 use crate::hiberutil::HibernateError;
 use crate::{info, warn};
 
@@ -25,7 +25,7 @@ static PUBLIC_KEY_DIR: &str = "/run/hibernate/";
 static PUBLIC_KEY_NAME: &str = "pubkey";
 /// Define the fixed test key seed, used when a developer wants to hibernate or
 /// resume now with --test-keys.
-const TEST_KEY_MATERIAL: &[u8; HIBERNATE_META_KEY_SIZE] = b"TestHibernateKeyMaterial12345678";
+const TEST_KEY_MATERIAL: &[u8; META_ASYMMETRIC_KEY_SIZE] = b"TestHibernateKeyMaterial12345678";
 
 /// The HibernateKeyManager stores the public and private key pair. The public
 /// side is used to encrypt the hibernate metadata at suspend time. The private
@@ -81,7 +81,7 @@ impl HibernateKeyManager {
         let mut key_file = File::create(&key_path).context("Cannot create public key file")?;
         let public_key = &self.private_key.as_ref().unwrap().raw_public_key().unwrap();
 
-        assert!(public_key.len() == HIBERNATE_META_KEY_SIZE);
+        assert!(public_key.len() == META_ASYMMETRIC_KEY_SIZE);
 
         let slice = [IoSlice::new(public_key)];
         let bytes_written = key_file
@@ -109,7 +109,7 @@ impl HibernateKeyManager {
         let mut key_file = File::open(&key_path)
             .context("No hibernate public key. Use --test-keys to hibernate now")?;
 
-        let mut public_key = [0u8; HIBERNATE_META_KEY_SIZE];
+        let mut public_key = [0u8; META_ASYMMETRIC_KEY_SIZE];
         let bytes_read = key_file
             .read(&mut public_key)
             .context("Failed to read hibernate public key")?;
@@ -182,7 +182,7 @@ impl HibernateKeyManager {
         metadata: &mut HibernateMetadata,
         deriver: &mut Deriver,
     ) -> Result<()> {
-        assert!(deriver.len().unwrap() >= HIBERNATE_META_KEY_SIZE);
+        assert!(deriver.len().unwrap() >= META_ASYMMETRIC_KEY_SIZE);
 
         let mut derived_metadata_key = vec![0u8; deriver.len().unwrap()];
         let key_size = deriver
@@ -199,7 +199,7 @@ impl HibernateKeyManager {
 
         // Install the shared key into the metadata.
         metadata.set_metadata_key(
-            derived_metadata_key[..HIBERNATE_DATA_KEY_SIZE]
+            derived_metadata_key[..META_SYMMETRIC_KEY_SIZE]
                 .try_into()
                 .unwrap(),
         );
