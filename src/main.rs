@@ -74,11 +74,8 @@ fn hiberman_cookie(args: &mut std::env::Args) -> std::result::Result<(), ()> {
 
     let clear_cookie = matches.opt_present("c");
     let set_cookie = matches.opt_present("s");
-    let mut path = None;
     let verbose = matches.opt_present("v");
-    if !matches.free.is_empty() {
-        path = Some(matches.free[0].clone());
-    }
+    let path = matches.free.iter().next().cloned();
 
     // In verbose mode, or for anything other than "get", fire up logging.
     if verbose || set_cookie || clear_cookie {
@@ -286,9 +283,6 @@ fn hiberman_main() -> std::result::Result<(), ()> {
         }
     };
 
-    let mut args = std::env::args();
-    args.next();
-    args.next();
     match subcommand.as_ref() {
         "--help" | "-h" | "help" => {
             app_usage(false);

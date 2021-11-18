@@ -6,8 +6,7 @@
 //! This is used to frontload potentially slow disk operations while we're stuck
 //! waiting for user input anyway, but not yet capable of decrypting.
 
-use std::collections::LinkedList;
-use std::convert::TryInto;
+use std::collections::VecDeque;
 use std::io::{Error as IoError, ErrorKind, IoSliceMut, Read};
 
 use anyhow::{Context, Result};
@@ -21,12 +20,12 @@ const PRELOADER_CHUNK_SIZE: usize = 1024 * 1024 * 2;
 /// The minimum percent of memory to keep free.
 const RESERVE_MEMORY_PERCENT: usize = 6;
 
-/// The ImagePreloader can read data from a source file and hold it in a linked
+/// The ImagePreloader can read data from a source file and hold it in a
 /// list of buffers. It then implements the Read trait, which drains those
 /// buffers.
 pub struct ImagePreloader<'a> {
     source: &'a mut dyn Read,
-    chunks: LinkedList<ImageChunk>,
+    chunks: VecDeque<ImageChunk>,
     total_size: usize,
     size_loaded: usize,
     chunk_offset: usize,
@@ -35,13 +34,11 @@ pub struct ImagePreloader<'a> {
 impl<'a> ImagePreloader<'a> {
     /// Create a new preloader, with a given total image size, and no buffers
     /// initially.
-    pub fn new(source: &'a mut dyn Read, total_size: u64) -> Self {
+    pub fn new(source: &'a mut dyn Read, total_size: usize) -> Self {
         Self {
             source,
-            chunks: LinkedList::new(),
-            total_size: total_size
-                .try_into()
-                .expect("The whole image should fit in memory"),
+            chunks: VecDeque::new(),
+            total_size,
             size_loaded: 0,
             chunk_offset: 0,
         }

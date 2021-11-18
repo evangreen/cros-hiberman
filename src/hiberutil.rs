@@ -74,9 +74,6 @@ pub enum HibernateError {
     /// Snapshot ioctl error.
     #[error("Snapshot ioctl error: {0}: {1}")]
     SnapshotIoctlError(String, sys_util::Error),
-    /// Statvfs error
-    #[error("Statvfs error: {0}")]
-    StatvfsError(sys_util::Error),
 }
 
 /// Options taken from the command line affecting hibernate.
@@ -129,7 +126,11 @@ pub fn get_total_memory_pages() -> usize {
             "Failed to get total memory (got {}). Assuming 4GB.",
             pagecount
         );
-        return 1024 * 1024 / get_page_size() * 1024 * 4;
+        // Just return 4GB worth of pages if the result is unknown, the minimum
+        // we're ever going to see on a hibernating system.
+        let pages_per_mb = 1024 * 1024 / get_page_size();
+        let pages_per_gb = pages_per_mb * 1024;
+        return pages_per_gb * 4;
     }
 
     pagecount

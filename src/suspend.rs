@@ -6,8 +6,10 @@
 
 use std::ffi::CString;
 use std::io::Write;
+use std::mem::MaybeUninit;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+use sys_util::syscall;
 
 use crate::cookie::set_hibernate_cookie;
 use crate::crypto::CryptoWriter;
@@ -21,9 +23,7 @@ use crate::hibermeta::{
     HibernateMetadata, HIBERNATE_META_FLAG_ENCRYPTED, HIBERNATE_META_FLAG_VALID,
 };
 use crate::hiberutil::HibernateOptions;
-use crate::hiberutil::{
-    get_page_size, lock_process_memory, path_to_stateful_block, HibernateError, BUFFER_PAGES,
-};
+use crate::hiberutil::{get_page_size, lock_process_memory, path_to_stateful_block, BUFFER_PAGES};
 use crate::imagemover::ImageMover;
 use crate::keyman::HibernateKeyManager;
 use crate::snapdev::{SnapshotDevice, SnapshotMode};
@@ -33,9 +33,9 @@ use crate::{debug, error, info, warn};
 
 /// Define the swappiness value we'll set during hibernation.
 const SUSPEND_SWAPPINESS: i32 = 100;
-/// Define how low stateful free space is before we clean up the hiberfile after
-/// each hibernate.
-const LOW_DISK_FREE_THRESHOLD: u64 = 10;
+/// Define how low stateful free space must be as a percentage before we clean
+/// up the hiberfile after each hibernate.
+const LOW_DISK_FREE_THRESHOLD_PERCENT: u64 = 10;
 
 /// The SuspendConductor weaves a delicate baton to guide us through the
 /// symphony of hibernation.
@@ -239,7 +239,7 @@ impl SuspendConductor {
     /// Clean up the hibernate files, releasing that space back to other usermode apps.
     fn delete_data_if_disk_full(&mut self, fs_stats: libc::statvfs) {
         let free_percent = fs_stats.f_bfree * 100 / fs_stats.f_blocks;
-        if free_percent < LOW_DISK_FREE_THRESHOLD {
+        if free_percent < LOW_DISK_FREE_THRESHOLD_PERCENT {
             debug!("Freeing hiberdata: FS is only {}% free", free_percent);
             // TODO: Unlink hiberfile and metadata.
         } else {
@@ -250,22 +250,13 @@ impl SuspendConductor {
     /// Utility function to get the current stateful file system usage.
     fn get_fs_stats() -> Result<libc::statvfs> {
         let path = CString::new(HIBERNATE_DIR).unwrap();
-        let mut stats: libc::statvfs;
+        let mut stats: MaybeUninit<libc::statvfs> = MaybeUninit::zeroed();
 
-        let rc = unsafe {
-            // It's safe to zero out a new struct.
-            stats = std::mem::zeroed();
-            // It's safe to call this libc function with a struct we made
-            // ourselves. The path is safe because HIBERNATE_DIR contains no nul
-            // bytes.
-            libc::statvfs(path.as_ptr(), &mut stats)
-        };
+        // This is safe because only stats is modified.
+        syscall!(unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) })?;
 
-        if rc < 0 {
-            return Err(HibernateError::StatvfsError(sys_util::Error::last()))
-                .context("Failed to get FS stats");
-        }
-
-        Ok(stats)
+        // Safe because the syscall just initialized it, and we just verified
+        // the return was successful.
+        unsafe { Ok(stats.assume_init()) }
     }
 }

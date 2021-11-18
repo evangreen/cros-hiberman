@@ -4,6 +4,7 @@
 
 //! Implement support for managing hibernate metadata.
 
+use std::convert::TryFrom;
 use std::io::{IoSliceMut, Read, Write};
 
 use anyhow::{Context, Result};
@@ -172,49 +173,6 @@ impl HibernateMetadata {
         })
     }
 
-    /// Create a new metadata object based on the contents of the C structure
-    /// data.
-    fn load_from_data(pubdata: &PublicHibernateMetadata) -> Result<Self> {
-        if pubdata.magic != HIBERNATE_META_MAGIC {
-            return Err(HibernateError::MetadataError(format!(
-                "Invalid metadata magic: {:x?}, expected {:x?}",
-                pubdata.magic, HIBERNATE_META_MAGIC
-            )))
-            .context("Cannot load hibernate metadata");
-        }
-
-        if pubdata.version != HIBERNATE_META_VERSION {
-            return Err(HibernateError::MetadataError(format!(
-                "Invalid public metadata version: {:x?}, expected {:x?}",
-                pubdata.version, HIBERNATE_META_VERSION
-            )))
-            .context("Cannot loada hibernate metadata");
-        }
-
-        if (pubdata.flags & !HIBERNATE_META_VALID_FLAGS) != 0 {
-            return Err(HibernateError::MetadataError(format!(
-                "Invalid flags: {:x?}, valid mask {:x?}",
-                pubdata.flags, HIBERNATE_META_VALID_FLAGS
-            )))
-            .context("Cannot load hibernate metadata");
-        }
-
-        Ok(Self {
-            image_size: pubdata.image_size,
-            flags: pubdata.flags,
-            pagemap_pages: pubdata.pagemap_pages,
-            header_hash: [0u8; HIBERNATE_HASH_SIZE],
-            data_key: [0u8; HIBERNATE_DATA_KEY_SIZE],
-            data_iv: [0u8; HIBERNATE_DATA_IV_SIZE],
-            first_data_byte: pubdata.first_data_byte,
-            meta_iv: pubdata.private_iv,
-            meta_key: None,
-            meta_eph_public: pubdata.meta_eph_public,
-            private_blob: Some(pubdata.private),
-            save_private_data: true,
-        })
-    }
-
     /// Load the metadata from disk, and populates the structure based on the
     /// public data. The private data is left in a blob.
     pub fn load_from_disk(disk_file: &mut BouncedDiskFile) -> Result<Self> {
@@ -238,7 +196,7 @@ impl HibernateMetadata {
             )
         };
 
-        Self::load_from_data(&public_data)
+        Self::try_from(public_data)
     }
 
     /// Set the key used to encrypt/decrypt the private metadata.
@@ -462,5 +420,50 @@ impl HibernateMetadata {
         rand_bytes(buf, Source::Pseudorandom)
             .context("Cannot get random bytes for hibernate metadata")?;
         Ok(())
+    }
+}
+
+impl TryFrom<PublicHibernateMetadata> for HibernateMetadata {
+    type Error = anyhow::Error;
+
+    fn try_from(pubdata: PublicHibernateMetadata) -> std::result::Result<Self, Self::Error> {
+        if pubdata.magic != HIBERNATE_META_MAGIC {
+            return Err(HibernateError::MetadataError(format!(
+                "Invalid metadata magic: {:x?}, expected {:x?}",
+                pubdata.magic, HIBERNATE_META_MAGIC
+            )))
+            .context("Cannot load hibernate metadata");
+        }
+
+        if pubdata.version != HIBERNATE_META_VERSION {
+            return Err(HibernateError::MetadataError(format!(
+                "Invalid public metadata version: {:x?}, expected {:x?}",
+                pubdata.version, HIBERNATE_META_VERSION
+            )))
+            .context("Cannot loada hibernate metadata");
+        }
+
+        if (pubdata.flags & !HIBERNATE_META_VALID_FLAGS) != 0 {
+            return Err(HibernateError::MetadataError(format!(
+                "Invalid flags: {:x?}, valid mask {:x?}",
+                pubdata.flags, HIBERNATE_META_VALID_FLAGS
+            )))
+            .context("Cannot load hibernate metadata");
+        }
+
+        Ok(Self {
+            image_size: pubdata.image_size,
+            flags: pubdata.flags,
+            pagemap_pages: pubdata.pagemap_pages,
+            header_hash: [0u8; HIBERNATE_HASH_SIZE],
+            data_key: [0u8; HIBERNATE_DATA_KEY_SIZE],
+            data_iv: [0u8; HIBERNATE_DATA_IV_SIZE],
+            first_data_byte: pubdata.first_data_byte,
+            meta_iv: pubdata.private_iv,
+            meta_key: None,
+            meta_eph_public: pubdata.meta_eph_public,
+            private_blob: Some(pubdata.private),
+            save_private_data: true,
+        })
     }
 }

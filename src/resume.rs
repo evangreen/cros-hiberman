@@ -4,6 +4,7 @@
 
 //! Implement hibernate resume functionality
 
+use std::convert::TryInto;
 use std::io::{Read, Write};
 
 use anyhow::{Context, Result};
@@ -57,8 +58,9 @@ impl ResumeConductor {
         info!("Beginning resume");
         self.options = options;
         // Fire up the dbus server.
-        self.dbus_connection = Some(HiberDbusConnection::new()?);
-        self.dbus_connection.as_mut().unwrap().spawn_dbus_server()?;
+        let mut dbus_connection = HiberDbusConnection::new()?;
+        dbus_connection.spawn_dbus_server()?;
+        self.dbus_connection = Some(dbus_connection);
         // Start keeping logs in memory, anticipating success.
         redirect_log(HiberlogOut::BufferInMemory);
         let result = self.resume_inner();
@@ -180,7 +182,12 @@ impl ResumeConductor {
             info!("Not using preloader");
             mover_source = &mut joiner;
         } else {
-            preloader = ImagePreloader::new(&mut joiner, image_size);
+            preloader = ImagePreloader::new(
+                &mut joiner,
+                image_size
+                    .try_into()
+                    .expect("The whole image should fit in memory"),
+            );
             // Pump the header pages directly into the kernel. After the header
             // pages are fed to the kernel, the kernel will do a giant
             // allocation to make space for the resume image. We'll preload

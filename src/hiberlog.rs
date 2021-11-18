@@ -338,7 +338,7 @@ pub fn redirect_log(out: HiberlogOut) {
     let mut state = lock!();
     state.to_kmsg = false;
     match out {
-        HiberlogOut::BufferInMemory => {},
+        HiberlogOut::BufferInMemory => {}
         // If going back to syslog, dump any pending state into syslog.
         HiberlogOut::Syslog => state.flush_to_syslog(),
         HiberlogOut::File(_) => {
@@ -491,12 +491,20 @@ fn replay_line(line: String) {
         }
     };
 
-    // Parse out the facility and priority, and feed it back into the logger.
-    let facility = facprio & (0x17 << 3);
-    // This is safe because facility has defined all possible values for the
-    // mask we just applied.
-    let facility: Facility = unsafe { ::std::mem::transmute(facility) };
     // This is safe because all possible 8 values are defined in Priority.
-    let priority: Priority = unsafe { ::std::mem::transmute(facprio & 7) };
-    sys_util::syslog::log(priority, facility, None, format_args!("{}", contents));
+    let priority: Priority = priority_from_u8(facprio & 7);
+    sys_util::syslog::log(priority, Facility::User, None, format_args!("{}", contents));
+}
+
+fn priority_from_u8(value: u8) -> Priority {
+    match value {
+        0 => Priority::Emergency,
+        1 => Priority::Alert,
+        2 => Priority::Critical,
+        3 => Priority::Error,
+        4 => Priority::Warning,
+        5 => Priority::Notice,
+        6 => Priority::Info,
+        _ => Priority::Debug,
+    }
 }

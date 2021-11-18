@@ -6,7 +6,6 @@
 
 use std::fs::{metadata, File, OpenOptions};
 use std::os::unix::fs::FileTypeExt;
-use std::os::unix::io::AsRawFd;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -84,13 +83,17 @@ impl SnapshotDevice {
 
     /// Freeze userspace, stopping all userspace processes except this one.
     pub fn freeze_userspace(&mut self) -> Result<()> {
-        self.simple_ioctl(FREEZE, "FREEZE")
+        // This is safe because the ioctl doesn't modify memory in a way that
+        // violates Rust's guarantees.
+        unsafe { self.simple_ioctl(FREEZE, "FREEZE") }
     }
 
     /// Unfreeze userspace, resuming all other previously frozen userspace
     /// processes.
     pub fn unfreeze_userspace(&mut self) -> Result<()> {
-        self.simple_ioctl(UNFREEZE, "UNFREEZE")
+        // This is safe because the ioctl doesn't modify memory in a way that
+        // violates Rust's guarantees.
+        unsafe { self.simple_ioctl(UNFREEZE, "UNFREEZE") }
     }
 
     /// Ask the kernel to create its hibernate snapshot. Returns a boolean
@@ -100,57 +103,106 @@ impl SnapshotDevice {
     /// hibernated image is restored (false).
     pub fn atomic_snapshot(&mut self) -> Result<bool> {
         let mut in_suspend: c_int = 0;
-        self.ioctl(
-            CREATE_IMAGE,
-            "CREATE_IMAGE",
-            &mut in_suspend as *mut c_int as *mut c_void,
-        )?;
+        // This is safe because the ioctl modifies a u32 sized integer, which
+        // we have preinitialized and passed in.
+        unsafe {
+            self.ioctl_with_mut_ptr(
+                CREATE_IMAGE,
+                "CREATE_IMAGE",
+                &mut in_suspend as *mut c_int as *mut c_void,
+            )?;
+        }
         Ok(in_suspend != 0)
     }
 
     /// Jump into the fully loaded resume image. On success, this does not
     /// return, as it launches into the resumed image.
     pub fn atomic_restore(&mut self) -> Result<()> {
-        self.simple_ioctl(ATOMIC_RESTORE, "ATOMIC_RESTORE")
+        // This is safe because either the entire world will stop executing,
+        // or nothing happens, preserving Rust's guarantees.
+        unsafe { self.simple_ioctl(ATOMIC_RESTORE, "ATOMIC_RESTORE") }
     }
 
     /// Return the size of the recently snapshotted hibernate image in bytes.
     pub fn get_image_size(&mut self) -> Result<loff_t> {
         let mut image_size: loff_t = 0;
-        self.ioctl(
-            GET_IMAGE_SIZE,
-            "GET_IMAGE_SIZE",
-            &mut image_size as *mut loff_t as *mut c_void,
-        )?;
+        // This is safe because the ioctl modifies an loff_t sized integer,
+        // we are passing down.
+        unsafe {
+            self.ioctl_with_mut_ptr(
+                GET_IMAGE_SIZE,
+                "GET_IMAGE_SIZE",
+                &mut image_size as *mut loff_t as *mut c_void,
+            )?;
+        }
         Ok(image_size)
     }
 
     /// Indicate to the kernel whether or not to power down into "platform" mode
     /// (which I believe means S4).
     pub fn set_platform_mode(&mut self, use_platform_mode: bool) -> Result<()> {
-        let mut move_param: c_int = use_platform_mode as c_int;
+        let move_param: c_int = use_platform_mode as c_int;
         // Send the parameter down as a mutable pointer, even though the ioctl
         // will not modify it.
-        self.ioctl(
-            PLATFORM_SUPPORT,
-            "PLATFORM_SUPPORT",
-            &mut move_param as *mut c_int as *mut c_void,
-        )
+        unsafe {
+            self.ioctl_with_ptr(
+                PLATFORM_SUPPORT,
+                "PLATFORM_SUPPORT",
+                &move_param as *const c_int as *const c_void,
+            )
+        }
     }
 
     /// Power down the system.
     pub fn power_off(&mut self) -> Result<()> {
-        self.simple_ioctl(POWER_OFF, "POWER_OFF")
+        // This is safe because powering the system off does not violate any
+        // Rust guarantees.
+        unsafe { self.simple_ioctl(POWER_OFF, "POWER_OFF") }
     }
 
     /// Helper function to send an ioctl with no parameter and return a result.
-    fn simple_ioctl(&mut self, ioctl: c_ulong, name: &str) -> Result<()> {
-        self.ioctl(ioctl, name, std::ptr::null_mut::<c_void>())
+    /// # Safety
+    ///
+    /// The caller must ensure that the actions the ioctl performs uphold
+    /// Rust's memory safety guarantees. In this case, no parameter is being
+    /// passed, so those guarantees would mostly be concerned with larger
+    /// address space layout or memory model side effects.
+    unsafe fn simple_ioctl(&mut self, ioctl: c_ulong, name: &str) -> Result<()> {
+        let rc = sys_util::ioctl(&self.file, ioctl);
+        self.evaluate_ioctl_return(name, rc)
     }
 
     /// Helper function to send an ioctl and return a Result
-    fn ioctl(&mut self, ioctl: c_ulong, name: &str, param: *mut c_void) -> Result<()> {
-        let rc = unsafe { libc::ioctl(self.file.as_raw_fd(), ioctl, param) };
+    /// # Safety
+    ///
+    /// The caller must ensure that the actions the ioctl performs uphold
+    /// Rust's memory safety guarantees. Specifically
+    unsafe fn ioctl_with_ptr(
+        &mut self,
+        ioctl: c_ulong,
+        name: &str,
+        param: *const c_void,
+    ) -> Result<()> {
+        let rc = sys_util::ioctl_with_ptr(&self.file, ioctl, param);
+        self.evaluate_ioctl_return(name, rc)
+    }
+
+    /// Helper function to send an ioctl and return a Result
+    /// # Safety
+    ///
+    /// The caller must ensure that the actions the ioctl performs uphold
+    /// Rust's memory safety guarantees. Specifically
+    unsafe fn ioctl_with_mut_ptr(
+        &mut self,
+        ioctl: c_ulong,
+        name: &str,
+        param: *mut c_void,
+    ) -> Result<()> {
+        let rc = sys_util::ioctl_with_mut_ptr(&self.file, ioctl, param);
+        self.evaluate_ioctl_return(name, rc)
+    }
+
+    fn evaluate_ioctl_return(&mut self, name: &str, rc: c_int) -> Result<()> {
         if rc < 0 {
             return Err(HibernateError::SnapshotIoctlError(
                 name.to_string(),
