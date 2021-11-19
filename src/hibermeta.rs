@@ -9,10 +9,12 @@ use std::io::{IoSliceMut, Read, Write};
 
 use anyhow::{Context, Result};
 use openssl::symm::{Cipher, Crypter, Mode};
+use serde::{Deserialize, Serialize};
 use sys_util::rand::{rand_bytes, Source};
 
 use crate::diskfile::BouncedDiskFile;
-use crate::hiberutil::{any_as_u8_slice, HibernateError};
+use crate::hiberutil::HibernateError;
+use crate::info;
 
 /// Magic value used to recognize a hibernate metadata struct.
 const META_MAGIC: u64 = 0x6174654D72626948;
@@ -54,9 +56,12 @@ pub const META_HASH_SIZE: usize = 32;
 pub const META_SYMMETRIC_KEY_SIZE: usize = 16;
 pub const META_SYMMETRIC_IV_SIZE: usize = META_SYMMETRIC_KEY_SIZE;
 
+/// Define the reserved size of the unencrypted public area.
+const META_PUBLIC_SIZE: usize = 0x1000;
+
 /// Define the size of the encrypted private area. Bump this up (and
 /// bump the version) if PrivateHibernateMetadata outgrows it.
-pub const META_PRIVATE_SIZE: usize = 0x400;
+pub const META_PRIVATE_SIZE: usize = 0x1000;
 
 /// Define the size of the asymmetric key pairs used to encrypt the hibernate
 /// metadata.
@@ -96,8 +101,7 @@ pub struct HibernateMetadata {
 
 /// Define the structure of the public hibernate metadata, which is written
 /// out to disk unencrypted.
-/// Use repr(C) to ensure a consistent structure layout.
-#[repr(C)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct PublicHibernateMetadata {
     /// This must be set to META_MAGIC.
     magic: u64,
@@ -117,14 +121,11 @@ pub struct PublicHibernateMetadata {
     meta_eph_public: [u8; META_ASYMMETRIC_KEY_SIZE],
     /// IV used for private portion of metadata.
     private_iv: [u8; META_SYMMETRIC_IV_SIZE],
-    /// Encrypted portion.
-    private: [u8; META_PRIVATE_SIZE],
 }
 
 /// Define the structure of the private hibernate metadata, which is written
 /// out to disk encrypted.
-/// Use repr(C) to ensure a consistent structure layout.
-#[repr(C)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct PrivateHibernateMetadata {
     /// This must be set to META_VERSION.
     version: u32,
@@ -176,27 +177,43 @@ impl HibernateMetadata {
     /// Load the metadata from disk, and populates the structure based on the
     /// public data. The private data is left in a blob.
     pub fn load_from_disk(disk_file: &mut BouncedDiskFile) -> Result<Self> {
-        let mut buf = vec![0u8; 4096];
-        let mut slice = [IoSliceMut::new(&mut buf)];
+        // Read the public data area.
+        let mut public_buf = vec![0u8; META_PUBLIC_SIZE];
+        let mut slice = [IoSliceMut::new(&mut public_buf)];
         let bytes_read = disk_file
             .read_vectored(&mut slice)
             .context("Cannot read hibernate metadata")?;
-        if bytes_read < std::mem::size_of::<PublicHibernateMetadata>() {
+        if bytes_read != public_buf.len() {
             return Err(HibernateError::MetadataError(
                 "Read too few bytes".to_string(),
             ))
             .context("Cannot read hibernate metadata");
         }
 
-        // This is safe because the buffer is larger than the structure size, and the types
-        // in the struct are all basic.
-        let public_data: PublicHibernateMetadata = unsafe {
-            std::ptr::read_unaligned(
-                buf[0..std::mem::size_of::<PublicHibernateMetadata>()].as_ptr() as *const _,
-            )
-        };
+        // Read the private data area.
+        let mut private_buf = [0u8; META_PRIVATE_SIZE];
+        let mut slice = [IoSliceMut::new(&mut private_buf)];
+        let bytes_read = disk_file
+            .read_vectored(&mut slice)
+            .context("Cannot read hibernate metadata")?;
+        if bytes_read != private_buf.len() {
+            return Err(HibernateError::MetadataError(
+                "Read too few bytes".to_string(),
+            ))
+            .context("Cannot read hibernate metadata");
+        }
 
-        Self::try_from(public_data)
+        // Deserialize the public metadata.
+        let end = public_buf
+            .iter()
+            .position(|&b| b == b'\0')
+            .context("Could not find trailing null in public metadata")?;
+        let public_data: PublicHibernateMetadata = serde_json::from_slice(&public_buf[..end])
+            .context("Could not deserialize public metadata")?;
+        let mut metadata = Self::try_from(public_data)?;
+        // Plunk in the private blob for decryption later.
+        metadata.private_blob = Some(private_buf);
+        Ok(metadata)
     }
 
     /// Set the key used to encrypt/decrypt the private metadata.
@@ -225,27 +242,29 @@ impl HibernateMetadata {
         .unwrap();
         crypter.pad(true);
         let mut private_buf = vec![0u8; META_PRIVATE_SIZE + cipher.block_size()];
-        let decrypt_size = crypter
+        let mut decrypt_size = crypter
             .update(&self.private_blob.unwrap(), &mut private_buf)
             .context("Failed to decrypt private data")?;
-        if decrypt_size < std::mem::size_of::<PrivateHibernateMetadata>() {
+
+        decrypt_size += crypter
+            .finalize(&mut private_buf[decrypt_size..])
+            .context("Failed to decrypt private metadata")?;
+
+        if decrypt_size != META_PRIVATE_SIZE - 1 {
             return Err(HibernateError::MetadataError(format!(
                 "Private metadata was {:x?} bytes, expected at least {:x?}",
                 decrypt_size,
-                std::mem::size_of::<PrivateHibernateMetadata>()
+                META_PRIVATE_SIZE - 1
             )))
             .context("Cannot load private metadata");
         }
 
-        // This is safe because we just validated we decrypted the structure
-        // size (above), and the types in the struct are all basic.
-        let private_data: PrivateHibernateMetadata = unsafe {
-            std::ptr::read_unaligned(
-                private_buf[0..std::mem::size_of::<PrivateHibernateMetadata>()].as_ptr()
-                    as *const _,
-            )
-        };
-
+        let end = private_buf
+            .iter()
+            .position(|&b| b == b'\0')
+            .context("Could not find trailing null in private metadata")?;
+        let private_data: PrivateHibernateMetadata = serde_json::from_slice(&private_buf[..end])
+            .context("Could not deserialize private data")?;
         self.apply_private_data(&private_data)
     }
 
@@ -288,7 +307,7 @@ impl HibernateMetadata {
     /// private portion is zeroed out. This is useful on resume when the caller
     /// wants to update flags and clear the private area.
     pub fn write_to_disk(&self, disk_file: &mut BouncedDiskFile) -> Result<()> {
-        let mut buf = vec![0u8; 4096];
+        let mut buf = vec![0u8; META_PUBLIC_SIZE + META_PRIVATE_SIZE];
 
         // Check the flags being written in case somebody added a flag and
         // forgot to add it to the valid mask.
@@ -300,14 +319,26 @@ impl HibernateMetadata {
             .context("Cannot save hibernate metadata");
         }
 
-        assert!(buf.len() >= std::mem::size_of::<PublicHibernateMetadata>());
-
         let public_data = self.build_public_data(self.save_private_data)?;
-        // Copy the struct into the beginning of the u8 buffer. This is safe
-        // because the buffer was allocated to be larger than this struct size.
-        unsafe {
-            buf[0..std::mem::size_of::<PublicHibernateMetadata>()]
-                .copy_from_slice(any_as_u8_slice(&public_data));
+        let serialized_public_string =
+            serde_json::to_string(&public_data).context("Could not serialize public data")?;
+        let serialized_public = serialized_public_string.as_bytes();
+        let public_len = serialized_public.len();
+        info!("Public data size: {}/{}", public_len, META_PUBLIC_SIZE);
+
+        assert!(
+            public_len < META_PUBLIC_SIZE,
+            "serialized public data {} doesn't fit in {}",
+            public_len,
+            META_PUBLIC_SIZE
+        );
+
+        buf[0..public_len].copy_from_slice(serialized_public);
+        if self.save_private_data {
+            let private = self.build_private_buffer()?;
+            let private_len = private.len();
+            let end = META_PUBLIC_SIZE + private_len;
+            buf[META_PUBLIC_SIZE..end].copy_from_slice(&private);
         }
 
         let bytes_written = disk_file
@@ -334,12 +365,6 @@ impl HibernateMetadata {
 
     /// Create the public C struct from the current object contents.
     fn build_public_data(&self, include_private: bool) -> Result<PublicHibernateMetadata> {
-        let private = if include_private {
-            self.build_private_buffer()?
-        } else {
-            [0u8; META_PRIVATE_SIZE]
-        };
-
         let private_iv = if include_private {
             self.meta_iv
         } else {
@@ -361,15 +386,25 @@ impl HibernateMetadata {
             first_data_byte: self.first_data_byte,
             meta_eph_public,
             private_iv,
-            private,
         })
     }
 
     /// Construct the encrypted private buffer area.
     fn build_private_buffer(&self) -> Result<[u8; META_PRIVATE_SIZE]> {
-        let mut buf = [0u8; META_PRIVATE_SIZE];
         let private_data = self.build_private_data();
+        let cipher = Cipher::aes_128_cbc();
+        let serialized_private_string =
+            serde_json::to_string(&private_data).context("Could not serialize private data")?;
+        // Encrypt a fixed number of bytes regardless of the serialized size.
+        let mut serialized_private = [0u8; META_PRIVATE_SIZE];
+        let serialized_private_bytes = serialized_private_string.as_bytes();
+        let serialized_bytes_length = serialized_private_bytes.len();
 
+        // Only N-1 bytes are going to be encrypted, so ensure the serialized
+        // data fits in there.
+        assert!(serialized_bytes_length < META_PRIVATE_SIZE);
+
+        serialized_private[..serialized_bytes_length].copy_from_slice(serialized_private_bytes);
         if self.meta_key.is_none() {
             return Err(HibernateError::MetadataError(
                 "Cannot build private metadata without meta key".to_string(),
@@ -377,8 +412,7 @@ impl HibernateMetadata {
             .context("Cannot build private metadata");
         }
 
-        // Encrypt it into the buffer.
-        let cipher = Cipher::aes_128_cbc();
+        // Prepare to encrypt it into the buffer.
         let mut crypter = Crypter::new(
             cipher,
             Mode::Encrypt,
@@ -387,19 +421,31 @@ impl HibernateMetadata {
         )
         .unwrap();
         crypter.pad(true);
-        let encrypt_size;
-        // It's safe to call as_any_u8_slice() with the private data because the
-        // encrypter can handle the raw bytes.
-        unsafe {
-            encrypt_size = crypter
-                .update(any_as_u8_slice(&private_data), &mut buf)
-                .context("Cannot encrypt private metadata")?;
-        }
-
-        crypter
-            .finalize(&mut buf[encrypt_size..])
+        // Crypter demands that the output must be one block bigger than the
+        // input.
+        let mut ciphertext = vec![0u8; META_PRIVATE_SIZE + cipher.block_size()];
+        // Encrypt N - 1 bytes, so padding brings us up to N.
+        let mut encrypt_size = crypter
+            .update(
+                &serialized_private[..META_PRIVATE_SIZE - 1],
+                &mut ciphertext,
+            )
             .context("Cannot encrypt private metadata")?;
-        Ok(buf)
+
+        encrypt_size += crypter
+            .finalize(&mut ciphertext[encrypt_size..])
+            .context("Cannot encrypt private metadata")?;
+
+        assert!(
+            encrypt_size == META_PRIVATE_SIZE,
+            "Encrypted {} bytes, expected {}",
+            encrypt_size,
+            META_PRIVATE_SIZE
+        );
+
+        // Copy back into a correctly sized buffer and return that.
+        serialized_private.copy_from_slice(&ciphertext[..META_PRIVATE_SIZE]);
+        Ok(serialized_private)
     }
 
     /// Construct the private metadata C structure contents.
@@ -462,7 +508,7 @@ impl TryFrom<PublicHibernateMetadata> for HibernateMetadata {
             meta_iv: pubdata.private_iv,
             meta_key: None,
             meta_eph_public: pubdata.meta_eph_public,
-            private_blob: Some(pubdata.private),
+            private_blob: None,
             save_private_data: true,
         })
     }

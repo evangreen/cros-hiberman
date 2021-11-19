@@ -246,7 +246,7 @@ fn hiberman_resume(args: &mut std::env::Args) -> std::result::Result<(), ()> {
     };
 
     if let Err(e) = hiberman::resume(options) {
-        error!("Failed to resume: {}", e);
+        error!("Failed to resume: {:#?}", e);
         return Err(());
     }
 
