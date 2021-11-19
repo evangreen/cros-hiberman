@@ -22,6 +22,7 @@ use std::convert::TryInto;
 use std::io::{Error as IoError, ErrorKind, Read, Write};
 
 use anyhow::{Context, Result};
+use libc::utsname;
 use openssl::hash::{Hasher, MessageDigest};
 
 use crate::debug;
@@ -32,24 +33,11 @@ use crate::hiberutil::{get_page_size, HibernateError};
 /// 32MB.
 pub const HIBER_HEADER_MAX_SIZE: i64 = (1024 * 1024 * 32) + 4096;
 
-/// Kernel definitions embedded in swsusp_info.
-const NEW_UTS_LEN: usize = 64;
-
-#[repr(C)]
-struct NewUtsName {
-    sysname: [u8; NEW_UTS_LEN + 1],
-    nodename: [u8; NEW_UTS_LEN + 1],
-    release: [u8; NEW_UTS_LEN + 1],
-    version: [u8; NEW_UTS_LEN + 1],
-    machine: [u8; NEW_UTS_LEN + 1],
-    domainname: [u8; NEW_UTS_LEN + 1],
-}
-
 /// Define the swsusp_info header created by the kernel at the start of each
 /// hibernate image. Use this to figure out how many header pages there are.
 #[repr(C)]
 struct SwSuspInfo {
-    uts: NewUtsName,
+    uts: utsname,
     version_code: u32,
     num_physpages: usize,
     cpus: u32,
@@ -101,7 +89,8 @@ impl<'a> ImageSplitter<'a> {
         let page_size = self.page_size;
         let length = buf.len();
 
-        // The write better be at least a page, and an even multiple of a page.
+        // The write is always expected to be at least a page, and an even
+        // multiple of a page.
         assert!(length >= page_size);
         assert!((length & (page_size - 1)) == 0);
 
@@ -303,6 +292,11 @@ impl Read for ImageJoiner<'_> {
 /// number of metadata pages on success.
 fn get_meta_page_count(buf: &[u8], page_size: usize) -> std::io::Result<usize> {
     assert!(buf.len() >= page_size);
+
+    // Assert that libc didn't somehow change the size of the utsname header
+    // while we were sleeping, which would ruin the other structure member
+    // offsets.
+    assert!(std::mem::size_of::<utsname>() == (65 * 6));
 
     // This is safe because the buffer is larger than the structure size, and
     // the types in the struct are all basic.
