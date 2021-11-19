@@ -13,6 +13,7 @@ use libc::{self, c_int, c_ulong, c_void, loff_t};
 use sys_util::{ioctl_io_nr, ioctl_ior_nr, ioctl_iow_nr};
 
 use crate::hiberutil::HibernateError;
+use crate::{error, info};
 
 const SNAPSHOT_PATH: &str = "/dev/snapshot";
 
@@ -82,10 +83,13 @@ impl SnapshotDevice {
     }
 
     /// Freeze userspace, stopping all userspace processes except this one.
-    pub fn freeze_userspace(&mut self) -> Result<()> {
+    pub fn freeze_userspace(&mut self) -> Result<FrozenUserspaceTicket> {
         // This is safe because the ioctl doesn't modify memory in a way that
         // violates Rust's guarantees.
-        unsafe { self.simple_ioctl(FREEZE, "FREEZE") }
+        unsafe {
+            self.simple_ioctl(FREEZE, "FREEZE")?;
+        }
+        Ok(FrozenUserspaceTicket { snap_dev: self })
     }
 
     /// Unfreeze userspace, resuming all other previously frozen userspace
@@ -212,5 +216,26 @@ impl SnapshotDevice {
         }
 
         Ok(())
+    }
+}
+
+/// A structure that wraps the SnapshotDevice, and unfreezes userspace when
+/// dropped.
+pub struct FrozenUserspaceTicket<'a> {
+    snap_dev: &'a mut SnapshotDevice,
+}
+
+impl Drop for FrozenUserspaceTicket<'_> {
+    fn drop(&mut self) {
+        info!("Unfreezing userspace");
+        if let Err(e) = self.snap_dev.unfreeze_userspace() {
+            error!("Failed to unfreeze userspace: {}", e);
+        }
+    }
+}
+
+impl<'a> AsMut<SnapshotDevice> for FrozenUserspaceTicket<'a> {
+    fn as_mut(&mut self) -> &mut SnapshotDevice {
+        self.snap_dev
     }
 }

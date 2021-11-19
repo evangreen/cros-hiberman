@@ -24,7 +24,7 @@ use crate::hiberutil::HibernateOptions;
 use crate::hiberutil::{get_page_size, lock_process_memory, path_to_stateful_block, BUFFER_PAGES};
 use crate::imagemover::ImageMover;
 use crate::keyman::HibernateKeyManager;
-use crate::snapdev::{SnapshotDevice, SnapshotMode};
+use crate::snapdev::{FrozenUserspaceTicket, SnapshotDevice, SnapshotMode};
 use crate::splitter::ImageSplitter;
 use crate::sysfs::Swappiness;
 use crate::{debug, error, info, warn};
@@ -116,23 +116,8 @@ impl SuspendConductor {
     ) -> Result<()> {
         let mut snap_dev = SnapshotDevice::new(SnapshotMode::Read)?;
         info!("Freezing userspace");
-        snap_dev.freeze_userspace()?;
-        let mut result = self.snapshot_and_save(header_file, hiber_file, meta_file, &mut snap_dev);
-        // Take the snapshot device, and then drop it so that other processes
-        // really unfreeze.
-        let freeze_result = snap_dev.unfreeze_userspace();
-        // Fail an otherwise happy suspend for failing to unfreeze, but don't
-        // clobber an earlier error, as this is likely a downstream symptom.
-        if freeze_result.is_err() {
-            error!("Failed to unfreeze userspace: {:?}", freeze_result);
-            if result.is_ok() {
-                result = freeze_result;
-            }
-        } else {
-            debug!("Unfroze userspace");
-        }
-
-        result
+        let frozen_userspace = snap_dev.freeze_userspace()?;
+        self.snapshot_and_save(header_file, hiber_file, meta_file, frozen_userspace)
     }
 
     /// Snapshot the system, write the result to disk, and power down. Returns
@@ -143,10 +128,11 @@ impl SuspendConductor {
         header_file: DiskFile,
         hiber_file: DiskFile,
         mut meta_file: BouncedDiskFile,
-        snap_dev: &mut SnapshotDevice,
+        mut frozen_userspace: FrozenUserspaceTicket,
     ) -> Result<()> {
         let block_path = path_to_stateful_block()?;
         let dry_run = self.options.dry_run;
+        let snap_dev = frozen_userspace.as_mut();
         snap_dev.set_platform_mode(false)?;
         // This is where the suspend path and resume path fork. On success,
         // both halves of these conditions execute, just at different times.

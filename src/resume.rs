@@ -26,7 +26,7 @@ use crate::hiberutil::{
 use crate::imagemover::ImageMover;
 use crate::keyman::HibernateKeyManager;
 use crate::preloader::ImagePreloader;
-use crate::snapdev::{SnapshotDevice, SnapshotMode};
+use crate::snapdev::{FrozenUserspaceTicket, SnapshotDevice, SnapshotMode};
 use crate::splitter::ImageJoiner;
 use crate::{debug, error, info, warn};
 
@@ -134,8 +134,8 @@ impl ResumeConductor {
         snap_dev.set_platform_mode(false)?;
         self.read_image(header_file, hiber_file, &mut snap_dev)?;
         info!("Freezing userspace");
-        snap_dev.freeze_userspace()?;
-        let result = if self.options.dry_run {
+        let frozen_userspace = snap_dev.freeze_userspace()?;
+        if self.options.dry_run {
             info!("Not launching resume image: in a dry run.");
             // Flush the resume file logs.
             flush_log();
@@ -143,16 +143,8 @@ impl ResumeConductor {
             redirect_log(HiberlogOut::BufferInMemory);
             Ok(())
         } else {
-            self.launch_resume_image(meta_file, &mut snap_dev)
-        };
-
-        info!("Unfreezing userspace");
-        // Take the snap_dev, unfreeze userspace, and drop it.
-        if let Err(e) = snap_dev.unfreeze_userspace() {
-            error!("Failed to unfreeze userspace: {}", e);
+            self.launch_resume_image(meta_file, frozen_userspace)
         }
-
-        result
     }
 
     /// Load the resume image from disk into memory.
@@ -400,7 +392,7 @@ impl ResumeConductor {
     fn launch_resume_image(
         &mut self,
         mut meta_file: BouncedDiskFile,
-        snap_dev: &mut SnapshotDevice,
+        mut frozen_userspace: FrozenUserspaceTicket,
     ) -> Result<()> {
         // Clear the valid flag and set the resume flag to indicate this image
         // was resumed into.
@@ -420,6 +412,7 @@ impl ResumeConductor {
         flush_log();
         // Keep logs in memory for now.
         redirect_log(HiberlogOut::BufferInMemory);
+        let snap_dev = frozen_userspace.as_mut();
         let result = snap_dev.atomic_restore();
         error!("Resume failed");
         // If we are still executing then the resume failed. Mark it as such.
