@@ -176,11 +176,11 @@ impl HibernateMetadata {
 
     /// Load the metadata from disk, and populates the structure based on the
     /// public data. The private data is left in a blob.
-    pub fn load_from_disk(disk_file: &mut BouncedDiskFile) -> Result<Self> {
+    pub fn load_from_reader<R: Read>(mut reader: R) -> Result<Self> {
         // Read the public data area.
         let mut public_buf = vec![0u8; META_PUBLIC_SIZE];
         let mut slice = [IoSliceMut::new(&mut public_buf)];
-        let bytes_read = disk_file
+        let bytes_read = reader
             .read_vectored(&mut slice)
             .context("Cannot read hibernate metadata")?;
         if bytes_read != public_buf.len() {
@@ -193,7 +193,7 @@ impl HibernateMetadata {
         // Read the private data area.
         let mut private_buf = [0u8; META_PRIVATE_SIZE];
         let mut slice = [IoSliceMut::new(&mut private_buf)];
-        let bytes_read = disk_file
+        let bytes_read = reader
             .read_vectored(&mut slice)
             .context("Cannot read hibernate metadata")?;
         if bytes_read != private_buf.len() {
@@ -391,7 +391,16 @@ impl HibernateMetadata {
 
     /// Construct the encrypted private buffer area.
     fn build_private_buffer(&self) -> Result<[u8; META_PRIVATE_SIZE]> {
-        let private_data = self.build_private_data();
+        let private_data = PrivateHibernateMetadata {
+            version: META_VERSION,
+            pagemap_pages: self.pagemap_pages,
+            image_size: self.image_size,
+            flags: self.flags,
+            data_key: self.data_key,
+            data_iv: self.data_iv,
+            header_hash: self.header_hash,
+        };
+
         let cipher = Cipher::aes_128_cbc();
         let serialized_private_string =
             serde_json::to_string(&private_data).context("Could not serialize private data")?;
@@ -446,19 +455,6 @@ impl HibernateMetadata {
         // Copy back into a correctly sized buffer and return that.
         serialized_private.copy_from_slice(&ciphertext[..META_PRIVATE_SIZE]);
         Ok(serialized_private)
-    }
-
-    /// Construct the private metadata C structure contents.
-    fn build_private_data(&self) -> PrivateHibernateMetadata {
-        PrivateHibernateMetadata {
-            version: META_VERSION,
-            pagemap_pages: self.pagemap_pages,
-            image_size: self.image_size,
-            flags: self.flags,
-            data_key: self.data_key,
-            data_iv: self.data_iv,
-            header_hash: self.header_hash,
-        }
     }
 
     /// Fill a buffer with random bytes, given an open file to /dev/urandom.

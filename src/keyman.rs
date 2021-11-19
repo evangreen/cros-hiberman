@@ -68,22 +68,19 @@ impl HibernateKeyManager {
     /// Save the public key to a ramfs file so it can be used later by the
     /// hibernate service.
     pub fn save_public_key(&self) -> Result<()> {
-        if self.private_key.is_none() {
-            return Err(HibernateError::KeyManagerError(
-                "No public key to save".to_string(),
-            ))
-            .context("Cannot save public key");
-        }
+        let private_key = self.private_key.as_ref().ok_or_else(|| {
+            HibernateError::KeyManagerError("No private key to derive public key from".to_string())
+        })?;
 
         create_dir(PUBLIC_KEY_DIR).context("Cannot create directory to save public key")?;
         let key_path = Path::new(PUBLIC_KEY_DIR).join(PUBLIC_KEY_NAME);
         info!("Saving public key to {}", key_path.display());
         let mut key_file = File::create(&key_path).context("Cannot create public key file")?;
-        let public_key = &self.private_key.as_ref().unwrap().raw_public_key().unwrap();
+        let public_key = private_key.raw_public_key().unwrap();
 
         assert!(public_key.len() == META_ASYMMETRIC_KEY_SIZE);
 
-        let slice = [IoSlice::new(public_key)];
+        let slice = [IoSlice::new(&public_key)];
         let bytes_written = key_file
             .write_vectored(&slice)
             .context("Failed to write public key")?;

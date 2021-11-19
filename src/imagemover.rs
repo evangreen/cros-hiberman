@@ -9,10 +9,10 @@
 use std::io::{IoSliceMut, Read, Write};
 
 use anyhow::{Context, Result};
-use libc::{self, loff_t};
+use libc::{self, off64_t};
 
 use crate::mmapbuf::MmapBuffer;
-use crate::{debug, error, info, warn};
+use crate::{debug, info, warn};
 
 /// An ImageMover represents an engine used to move data from a source to a
 /// destination. It provides alignment and batching, but does not do any
@@ -22,8 +22,8 @@ use crate::{debug, error, info, warn};
 pub struct ImageMover<'a> {
     source_file: &'a mut dyn Read,
     dest_file: &'a mut dyn Write,
-    source_size: loff_t,
-    bytes_done: loff_t,
+    source_size: off64_t,
+    bytes_done: off64_t,
     source_chunk: usize,
     dest_chunk: usize,
     buffer_size: usize,
@@ -42,7 +42,7 @@ impl<'a> ImageMover<'a> {
     pub fn new(
         source_file: &'a mut dyn Read,
         dest_file: &'a mut dyn Write,
-        source_size: loff_t,
+        source_size: off64_t,
         source_chunk: usize,
         dest_chunk: usize,
     ) -> Result<ImageMover<'a>> {
@@ -80,23 +80,9 @@ impl<'a> ImageMover<'a> {
             let start = offset;
             let end = start + length;
             let buffer_slice = self.buffer.u8_slice();
-            let bytes_written = match self.dest_file.write(&buffer_slice[start..end]) {
-                Ok(s) => s,
-                Err(e) => {
-                    error!(
-                        "Only wrote {}-{}, {}/{}",
-                        offset,
-                        end - start,
-                        self.bytes_done,
-                        self.source_size
-                    );
-
-                    return Err(e).context("Failed to flush ImageMover buffer");
-                }
-            };
-
-            offset += bytes_written;
-            self.bytes_done += bytes_written as i64;
+            self.dest_file.write_all(&buffer_slice[start..end])?;
+            offset += length;
+            self.bytes_done += length as i64;
         }
 
         let percent_done = (self.bytes_done * 100 / self.source_size) as u32;

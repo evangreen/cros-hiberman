@@ -192,8 +192,8 @@ impl SuspendConductor {
         if !self.options.unencrypted {
             encryptor = CryptoWriter::new(
                 mover_dest,
-                self.metadata.data_key,
-                self.metadata.data_iv,
+                &self.metadata.data_key,
+                &self.metadata.data_iv,
                 true,
                 page_size * BUFFER_PAGES,
             )?;

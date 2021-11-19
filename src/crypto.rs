@@ -4,7 +4,7 @@
 
 //! Implement image symmetric encryption functionality.
 
-use std::io::{IoSlice, IoSliceMut, Read, Write};
+use std::io::{Read, Write};
 
 use anyhow::{Context, Result};
 use openssl::symm::{Cipher, Crypter, Mode};
@@ -34,8 +34,8 @@ impl<'a> CryptoWriter<'a> {
     /// chunk size that will be passed to the final destination writes.
     pub fn new(
         dest_file: &'a mut dyn Write,
-        key: [u8; META_SYMMETRIC_KEY_SIZE],
-        iv: [u8; META_SYMMETRIC_IV_SIZE],
+        key: &[u8],
+        iv: &[u8],
         encrypt: bool,
         buffer_size: usize,
     ) -> Result<Self> {
@@ -46,7 +46,12 @@ impl<'a> CryptoWriter<'a> {
             Mode::Decrypt
         };
 
-        let mut crypter = Crypter::new(cipher, mode, &key, Some(&iv)).unwrap();
+        assert!(key.len() == META_SYMMETRIC_KEY_SIZE);
+        assert!(iv.len() == META_SYMMETRIC_IV_SIZE);
+
+        // This is not expected to fail, since it would indicate we are passing
+        // nutty parameters, which we are not.
+        let mut crypter = Crypter::new(cipher, mode, key, Some(iv)).unwrap();
         crypter.pad(false);
         // Pad the buffer not only for alignment, but because Crypter::Update()
         // wants an extra block in the output buffer in case there were
@@ -102,13 +107,9 @@ impl Write for CryptoWriter<'_> {
             );
 
             // Do the write.
-            let slice = [IoSlice::new(&self.buffer.u8_slice()[..crypto_count])];
-            let bytes_done = self.dest_file.write_vectored(&slice)?;
-            if bytes_done == 0 {
-                break;
-            }
-
-            offset += bytes_done;
+            self.dest_file
+                .write_all(&self.buffer.u8_slice()[..crypto_count])?;
+            offset += crypto_count;
         }
 
         Ok(offset)
@@ -147,8 +148,8 @@ impl<'a> CryptoReader<'a> {
     /// average read size.
     pub fn new(
         source_file: &'a mut dyn Read,
-        key: [u8; META_SYMMETRIC_KEY_SIZE],
-        iv: [u8; META_SYMMETRIC_IV_SIZE],
+        key: &[u8],
+        iv: &[u8],
         encrypt: bool,
         buffer_size: usize,
     ) -> Result<Self> {
@@ -159,7 +160,12 @@ impl<'a> CryptoReader<'a> {
             Mode::Decrypt
         };
 
-        let mut crypter = Crypter::new(cipher, mode, &key, Some(&iv)).unwrap();
+        assert!(key.len() == META_SYMMETRIC_KEY_SIZE);
+        assert!(key.len() == META_SYMMETRIC_IV_SIZE);
+
+        // This is not expected to fail, since it would indicate we are passing
+        // nutty parameters, which we are not.
+        let mut crypter = Crypter::new(cipher, mode, key, Some(iv)).unwrap();
         crypter.pad(false);
         let buffer = MmapBuffer::new(buffer_size).context("Failed to create staging buffer")?;
         let extra = MmapBuffer::new(buffer_size + CRYPTO_BLOCK_SIZE)
@@ -211,29 +217,28 @@ impl Read for CryptoReader<'_> {
 
             assert!((size_this_round % CRYPTO_BLOCK_SIZE) == 0);
 
-            let mut slice = [IoSliceMut::new(&mut source_buf[..size_this_round])];
-            let source_bytes = self.source_file.read_vectored(&mut slice)?;
-            if source_bytes == 0 {
-                break;
-            }
-
-            assert!((source_bytes % CRYPTO_BLOCK_SIZE) == 0);
+            self.source_file
+                .read_exact(&mut source_buf[..size_this_round])?;
 
             // Process as much as possible directly into the caller's buffer.
             // Unfortunately the destination has to be oversized by one block,
-            // so the last block has to bounce though another buffer.
-            let direct_count = source_bytes - CRYPTO_BLOCK_SIZE;
-            let dst_end = offset + source_bytes;
+            // so the last block has to bounce though another buffer. These
+            // crypto operations are not expected to fail, as that would
+            // indicate a serious misconfiguration (read programmer error),
+            // rather than a condition that crops up at runtime.
+            let direct_count = size_this_round - CRYPTO_BLOCK_SIZE;
+            let dst_end = offset + size_this_round;
             offset += self
                 .crypter
                 .update(&source_buf[..direct_count], &mut buf[offset..dst_end])
                 .unwrap();
 
-            // Decrypt the last block into the extra buffer.
+            // Decrypt the last block into the extra buffer. This also is not
+            // expected to fail, hence the unwrap().
             self.extra_offset = 0;
             self.extra_size = self
                 .crypter
-                .update(&source_buf[direct_count..source_bytes], extra)
+                .update(&source_buf[direct_count..size_this_round], extra)
                 .unwrap();
         }
 

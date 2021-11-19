@@ -89,7 +89,7 @@ impl ResumeConductor {
         info!("Cleared cookie");
         let mut meta_file = open_metafile()?;
         debug!("Loading metadata");
-        let mut metadata = HibernateMetadata::load_from_disk(&mut meta_file)?;
+        let mut metadata = HibernateMetadata::load_from_reader(&mut meta_file)?;
         if (metadata.flags & META_FLAG_VALID) == 0 {
             return Err(HibernateError::MetadataError(
                 "No valid hibernate image".to_string(),
@@ -246,8 +246,8 @@ impl ResumeConductor {
         if (metadata.flags & META_FLAG_ENCRYPTED) != 0 {
             decryptor = CryptoReader::new(
                 mover_source,
-                metadata.data_key,
-                metadata.data_iv,
+                &metadata.data_key,
+                &metadata.data_iv,
                 false,
                 page_size * BUFFER_PAGES,
             )?;

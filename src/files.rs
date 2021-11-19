@@ -143,8 +143,8 @@ fn get_total_memory_mb() -> u32 {
     }
 }
 
-/// Helper function used to preallocate space on a file using the fallocate() C
-/// library call.
+/// Helper function used to preallocate space on a file using the fallocate64()
+/// C library call.
 fn preallocate_file(path: &Path, size: i64) -> Result<File> {
     let file = OpenOptions::new()
         .read(true)
@@ -153,8 +153,8 @@ fn preallocate_file(path: &Path, size: i64) -> Result<File> {
         .open(path)
         .context("Failed to preallocate hibernate file")?;
 
-    // This is safe because fallocate() doesn't modify memory.
-    let rc = unsafe { libc::fallocate(file.as_raw_fd(), 0, 0, size) as isize };
+    // This is safe because fallocate64() doesn't modify memory.
+    let rc = unsafe { libc::fallocate64(file.as_raw_fd(), 0, 0, size) as isize };
 
     if rc < 0 {
         return Err(HibernateError::FallocateError(sys_util::Error::last()))

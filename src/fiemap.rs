@@ -195,7 +195,7 @@ impl Fiemap {
         let mut buffer = vec![0u8; buffer_size];
         // Copy the fiemap struct into the beginning of the u8 buffer. This is
         // safe because the buffer was allocated to be larger than this struct
-        // size.
+        // size, and the structure contains no padding bytes.
         unsafe {
             buffer[0..fiemap_len].copy_from_slice(any_as_u8_slice(&fiemap));
         }
