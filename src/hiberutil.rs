@@ -49,9 +49,6 @@ pub enum HibernateError {
     /// Key manager error
     #[error("Key manager error: {0}")]
     KeyManagerError(String),
-    /// Logger uninitialized.
-    #[error("Logger uninitialized")]
-    LoggerUninitialized(),
     /// Metadata error
     #[error("Metadata error: {0}")]
     MetadataError(String),
@@ -61,9 +58,6 @@ pub enum HibernateError {
     /// Mmap error.
     #[error("mmap error: {0}")]
     MmapError(sys_util::Error),
-    /// Poisoned
-    #[error("Poisoned")]
-    PoisonedError(),
     /// I/O size error
     #[error("I/O size error: {0}")]
     IoSizeError(String),

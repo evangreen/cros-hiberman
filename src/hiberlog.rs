@@ -6,17 +6,17 @@
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::str;
-use std::sync::{MutexGuard, Once};
+use std::sync::MutexGuard;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
 use log::{debug, warn, Level, LevelFilter, Log, Metadata, Record};
+use once_cell::sync::OnceCell;
 use sync::Mutex;
 use syslog::{BasicLogger, Facility, Formatter3164};
 
 use crate::diskfile::BouncedDiskFile;
 use crate::files::open_log_file;
-use crate::hiberutil::HibernateError;
 
 /// Define the path to kmsg, used to send log lines into the kernel buffer in
 /// case a crash occurs.
@@ -26,49 +26,23 @@ const LOG_PREFIX: &str = "hiberman";
 /// Define the default flush threshold. This must be a power of two.
 const FLUSH_THRESHOLD: usize = 4096;
 
-// Copied from sys_util/src/syslog.rs.
-// TODO: Figure out how to modify sys_util so that we can just implement a backend here.
-static STATE_ONCE: Once = Once::new();
-static mut STATE: *const Mutex<Hiberlog> = 0 as *const _;
+static STATE: OnceCell<Mutex<Hiberlog>> = OnceCell::new();
 
-fn new_mutex_ptr<T>(inner: T) -> *const Mutex<T> {
-    Box::into_raw(Box::new(Mutex::new(inner)))
-}
-
-/// Initialize the syslog connection and internal variables.
-///
-/// This should only be called once per process before any other threads have been spawned or any
-/// signal handlers have been registered. Every call made after the first will have no effect
-/// besides return `Ok` or `Err` appropriately.
-pub fn init() -> Result<()> {
-    let mut err: Result<()> =
-        Err(HibernateError::PoisonedError()).context("Failed to initialize log");
-    STATE_ONCE.call_once(|| match Hiberlog::new() {
-        // Safe because STATE mutation is guarded by `Once`.
-        Ok(state) => unsafe { STATE = new_mutex_ptr(state) },
-        Err(e) => err = Err(e),
-    });
-
-    // Safe because STATE mutation is guarded by `Once`.
-    if unsafe { STATE.is_null() } {
-        return err;
-    }
-
-    log::set_boxed_logger(Box::new(HiberLogger::new()))
-        .map(|()| log::set_max_level(LevelFilter::Debug))
-        .context("Failed to set logger")
+fn get_state() -> Result<&'static Mutex<Hiberlog>> {
+    STATE.get_or_try_init(|| Hiberlog::new().map(Mutex::new))
 }
 
 fn lock() -> Result<MutexGuard<'static, Hiberlog>> {
-    // Safe because we assume that STATE is always in either a valid or NULL state.
-    let state_ptr = unsafe { STATE };
-    if state_ptr.is_null() {
-        return Err(HibernateError::LoggerUninitialized()).context("Failed to lock logger");
-    }
-    // Safe because STATE only mutates once and we checked for NULL.
-    let state = unsafe { &*state_ptr };
-    let guard = state.lock();
-    Ok(guard)
+    get_state().map(Mutex::lock)
+}
+
+/// Initialize the syslog connection and internal variables.
+pub fn init() -> Result<()> {
+    // Warm up to initialize the state.
+    let _ = get_state()?;
+    log::set_boxed_logger(Box::new(HiberLogger::new()))
+        .map(|()| log::set_max_level(LevelFilter::Debug))?;
+    Ok(())
 }
 
 // Attempts to lock and retrieve the state. Returns from the function silently on failure.
@@ -96,13 +70,11 @@ impl Log for HiberLogger {
     }
 
     fn log(&self, record: &Record) {
-        // let mut state = lock().unwrap();
         let mut state = lock!();
         state.log_record(record)
     }
 
     fn flush(&self) {
-        // let mut state = lock().unwrap();
         let mut state = lock!();
         state.flush_full_pages()
     }
@@ -114,8 +86,8 @@ pub enum HiberlogOut {
     BufferInMemory,
     /// Push log lines to the syslogger.
     Syslog,
-    /// Push log lines to a DiskFile.
-    File(Box<dyn Write>),
+    /// Push log lines to a File-like object.
+    File(Box<dyn Write + Send>),
 }
 
 /// Define the (singleton) hibernate logger state.

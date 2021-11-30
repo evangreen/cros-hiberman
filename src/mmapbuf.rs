@@ -74,3 +74,8 @@ impl Drop for MmapBuffer {
         }
     }
 }
+
+// It's safe for MmapBuffer to implement Send despite using a raw pointer
+// because the object behind that pointer contains to references to thread
+// local variables.
+unsafe impl Send for MmapBuffer {}
