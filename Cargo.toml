@@ -20,8 +20,11 @@ overflow-checks = true
 anyhow = "1.0.0"
 getopts = "0.2"
 libc = "0.2.93"
+log = { version = "0.4", features = ["std", "serde"] }
+once_cell = "1.7"
 sync = { path = "../../platform/crosvm/sync" } # provided by ebuild
 sys_util = { path = "../../platform/crosvm/sys_util" } # provided by ebuild
+syslog = "4.0.0"
 thiserror = "1.0.20"
 openssl = "0.10.36"
 dbus = "0.9"

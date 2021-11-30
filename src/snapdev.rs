@@ -10,10 +10,10 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use libc::{self, c_int, c_ulong, c_void, loff_t};
+use log::{error, info};
 use sys_util::{ioctl_io_nr, ioctl_ior_nr, ioctl_iow_nr};
 
 use crate::hiberutil::HibernateError;
-use crate::{error, info};
 
 const SNAPSHOT_PATH: &str = "/dev/snapshot";
 

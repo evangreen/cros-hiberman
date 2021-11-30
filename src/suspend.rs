@@ -9,6 +9,7 @@ use std::io::Write;
 use std::mem::MaybeUninit;
 
 use anyhow::Result;
+use log::{debug, error, info, warn};
 use sys_util::syscall;
 
 use crate::cookie::set_hibernate_cookie;
@@ -27,7 +28,6 @@ use crate::keyman::HibernateKeyManager;
 use crate::snapdev::{FrozenUserspaceTicket, SnapshotDevice, SnapshotMode};
 use crate::splitter::ImageSplitter;
 use crate::sysfs::Swappiness;
-use crate::{debug, error, info, warn};
 
 /// Define the swappiness value we'll set during hibernation.
 const SUSPEND_SWAPPINESS: i32 = 100;
@@ -156,7 +156,6 @@ impl SuspendConductor {
             // Any logs beyond here are lost upon powerdown.
             flush_log();
             redirect_log(HiberlogOut::BufferInMemory);
-
             // Power the thing down.
             if !dry_run {
                 snap_dev.power_off()?;

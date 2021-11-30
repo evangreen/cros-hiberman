@@ -8,13 +8,13 @@ use std::convert::TryFrom;
 use std::io::{IoSliceMut, Read, Write};
 
 use anyhow::{Context, Result};
+use log::info;
 use openssl::symm::{Cipher, Crypter, Mode};
 use serde::{Deserialize, Serialize};
 use sys_util::rand::{rand_bytes, Source};
 
 use crate::diskfile::BouncedDiskFile;
 use crate::hiberutil::HibernateError;
-use crate::info;
 
 /// Magic value used to recognize a hibernate metadata struct.
 const META_MAGIC: u64 = 0x6174654D72626948;

@@ -13,9 +13,9 @@ use dbus::blocking::Connection;
 use dbus::channel::MatchingReceiver;
 use dbus::message::MatchRule;
 use dbus_crossroads::{Context, Crossroads};
+use log::{debug, error, info};
 
 use crate::hiberutil::HibernateError;
-use crate::{debug, error, info};
 
 /// Define the minimum acceptable seed material length.
 const MINIMUM_SEED_SIZE: usize = 32;

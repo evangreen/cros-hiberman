@@ -7,9 +7,8 @@
 use std::process::Command;
 
 use anyhow::{Context, Result};
+use log::{error, warn};
 use thiserror::Error as ThisError;
-
-use crate::{error, warn};
 
 /// Define the number of pages in a larger chunk used to read and write the
 /// hibernate data file.

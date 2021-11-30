@@ -5,9 +5,8 @@
 //! Coordinates suspend-to-disk activities
 
 use getopts::{self, Options};
-use hiberman::{self, error};
-use hiberman::{HibernateOptions, ResumeOptions};
-use sys_util::syslog;
+use hiberman::{self, HibernateOptions, ResumeOptions};
+use log::error;
 
 fn print_usage(message: &str, error: bool) {
     if error {
@@ -18,11 +17,6 @@ fn print_usage(message: &str, error: bool) {
 }
 
 fn init_logging() -> std::result::Result<(), ()> {
-    if let Err(e) = syslog::init() {
-        eprintln!("failed to initialize syslog: {}", e);
-        return Err(());
-    }
-
     if let Err(e) = hiberman::hiberlog::init() {
         eprintln!("failed to initialize hiberlog: {}", e);
         return Err(());

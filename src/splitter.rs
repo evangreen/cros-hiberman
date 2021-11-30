@@ -23,9 +23,9 @@ use std::io::{Error as IoError, ErrorKind, Read, Write};
 
 use anyhow::{Context, Result};
 use libc::utsname;
+use log::debug;
 use openssl::hash::{Hasher, MessageDigest};
 
-use crate::debug;
 use crate::hibermeta::{HibernateMetadata, META_HASH_SIZE};
 use crate::hiberutil::{get_page_size, HibernateError};
 

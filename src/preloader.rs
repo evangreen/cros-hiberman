@@ -10,10 +10,10 @@ use std::collections::VecDeque;
 use std::io::{Error as IoError, ErrorKind, IoSliceMut, Read};
 
 use anyhow::{Context, Result};
+use log::{debug, info, warn};
 
 use crate::hiberutil::{get_available_pages, get_page_size, get_total_memory_pages};
 use crate::mmapbuf::MmapBuffer;
-use crate::{debug, info, warn};
 
 /// Allocate buffers in chunks to keep things large but manageable.
 const PRELOADER_CHUNK_SIZE: usize = 1024 * 1024 * 2;

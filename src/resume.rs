@@ -8,6 +8,7 @@ use std::convert::TryInto;
 use std::io::{Read, Write};
 
 use anyhow::{Context, Result};
+use log::{debug, error, info, warn};
 
 use crate::cookie::set_hibernate_cookie;
 use crate::crypto::CryptoReader;
@@ -28,7 +29,6 @@ use crate::keyman::HibernateKeyManager;
 use crate::preloader::ImagePreloader;
 use crate::snapdev::{FrozenUserspaceTicket, SnapshotDevice, SnapshotMode};
 use crate::splitter::ImageJoiner;
-use crate::{debug, error, info, warn};
 
 /// The ResumeConductor orchestrates the various individual instruments that
 /// work in concert to resume the system from hibernation.

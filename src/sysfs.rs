@@ -8,8 +8,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 
 use anyhow::{Context, Result};
-
-use crate::{debug, warn};
+use log::{debug, warn};
 
 const SWAPPINESS_PATH: &str = "/proc/sys/vm/swappiness";
 

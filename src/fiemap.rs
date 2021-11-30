@@ -11,10 +11,10 @@ use std::os::unix::io::AsRawFd;
 
 use anyhow::{Context, Result};
 use libc::c_void;
+use log::{debug, error};
 use sys_util::ioctl_iowr_nr;
 
 use crate::hiberutil::{any_as_u8_slice, HibernateError};
-use crate::{debug, error};
 
 ioctl_iowr_nr!(FS_IOC_FIEMAP, 'f' as u32, 11, C_Fiemap);
 /// Define the Linux ioctl number for getting the fiemap.

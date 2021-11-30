@@ -10,9 +10,9 @@ use std::io::{IoSliceMut, Read, Write};
 
 use anyhow::{Context, Result};
 use libc::{self, off64_t};
+use log::{debug, info, warn};
 
 use crate::mmapbuf::MmapBuffer;
-use crate::{debug, info, warn};
 
 /// An ImageMover represents an engine used to move data from a source to a
 /// destination. It provides alignment and batching, but does not do any

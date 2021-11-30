@@ -9,11 +9,11 @@ use std::io::{Error as IoError, ErrorKind, IoSlice, IoSliceMut, Read, Seek, Seek
 use std::os::unix::fs::OpenOptionsExt;
 
 use anyhow::{Context, Result};
+use log::{debug, error};
 
 use crate::fiemap::{Fiemap, FiemapExtent};
 use crate::hiberutil::{get_page_size, path_to_stateful_part};
 use crate::mmapbuf::MmapBuffer;
-use crate::{debug, error};
 
 /// The BouncedDiskFile is a convencience wrapper around the DiskFile structure.
 /// It uses an internal buffer to avoid the stricter buffer alignment

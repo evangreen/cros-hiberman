@@ -12,12 +12,12 @@ use std::io::{IoSlice, Read, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use log::{info, warn};
 use openssl::derive::Deriver;
 use openssl::pkey::{Id, PKey, Private, Public};
 
 use crate::hibermeta::{HibernateMetadata, META_ASYMMETRIC_KEY_SIZE, META_SYMMETRIC_KEY_SIZE};
 use crate::hiberutil::HibernateError;
-use crate::{info, warn};
 
 /// Define the ramfs location where the hibernate public key is stored.
 static PUBLIC_KEY_DIR: &str = "/run/hibernate/";

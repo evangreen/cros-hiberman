@@ -9,12 +9,12 @@ use std::os::unix::io::AsRawFd;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use log::{debug, info};
 
 use crate::diskfile::{BouncedDiskFile, DiskFile};
 use crate::hiberlog::HiberlogFile;
 use crate::hiberutil::{get_page_size, get_total_memory_pages, HibernateError};
 use crate::splitter::HIBER_HEADER_MAX_SIZE;
-use crate::{debug, info};
 
 /// Define the directory where hibernate state files are kept.
 pub const HIBERNATE_DIR: &str = "/mnt/stateful_partition/unencrypted/hibernate";

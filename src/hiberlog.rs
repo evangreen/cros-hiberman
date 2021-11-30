@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 //! Implement consistent logging across the hibernate and resume transition.
-use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::str;
@@ -11,9 +10,9 @@ use std::sync::{MutexGuard, Once};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
+use log::{debug, warn, Level, LevelFilter, Log, Metadata, Record};
 use sync::Mutex;
-
-pub use sys_util::syslog::{Facility, Priority};
+use syslog::{BasicLogger, Facility, Formatter3164};
 
 use crate::diskfile::BouncedDiskFile;
 use crate::files::open_log_file;
@@ -52,10 +51,12 @@ pub fn init() -> Result<()> {
 
     // Safe because STATE mutation is guarded by `Once`.
     if unsafe { STATE.is_null() } {
-        err
-    } else {
-        Ok(())
+        return err;
     }
+
+    log::set_boxed_logger(Box::new(HiberLogger::new()))
+        .map(|()| log::set_max_level(LevelFilter::Debug))
+        .context("Failed to set logger")
 }
 
 fn lock() -> Result<MutexGuard<'static, Hiberlog>> {
@@ -80,46 +81,31 @@ macro_rules! lock {
     };
 }
 
-/// A macro for logging at an arbitrary priority level.
-///
-/// Note that this will fail silently if syslog was not initialized.
-#[macro_export]
-macro_rules! log {
-    ($pri:expr, $($args:tt)+) => ({
-        $crate::hiberlog::log($pri, $crate::hiberlog::Facility::User, Some((file!(), line!())), format_args!($($args)+))
-    })
+/// Define the instance that gets handed to the logging crate.
+struct HiberLogger {}
+
+impl HiberLogger {
+    pub fn new() -> Self {
+        HiberLogger {}
+    }
 }
 
-/// A macro for logging an error.
-///
-/// Note that this will fail silently if syslog was not initialized.
-#[macro_export]
-macro_rules! error {
-    ($($args:tt)+) => ($crate::log!($crate::hiberlog::Priority::Error, $($args)*))
-}
+impl Log for HiberLogger {
+    fn enabled(&self, _metadata: &Metadata) -> bool {
+        true
+    }
 
-/// A macro for logging a warning.
-///
-/// Note that this will fail silently if syslog was not initialized.
-#[macro_export]
-macro_rules! warn {
-    ($($args:tt)+) => ($crate::log!($crate::hiberlog::Priority::Warning, $($args)*))
-}
+    fn log(&self, record: &Record) {
+        // let mut state = lock().unwrap();
+        let mut state = lock!();
+        state.log_record(record)
+    }
 
-/// A macro for logging info.
-///
-/// Note that this will fail silently if syslog was not initialized.
-#[macro_export]
-macro_rules! info {
-    ($($args:tt)+) => ($crate::log!($crate::hiberlog::Priority::Info, $($args)*))
-}
-
-/// A macro for logging debug information.
-///
-/// Note that this will fail silently if syslog was not initialized.
-#[macro_export]
-macro_rules! debug {
-    ($($args:tt)+) => ($crate::log!($crate::hiberlog::Priority::Debug, $($args)*))
+    fn flush(&self) {
+        // let mut state = lock().unwrap();
+        let mut state = lock!();
+        state.flush_full_pages()
+    }
 }
 
 /// Define the possibilities as to where to route log lines to.
@@ -132,7 +118,7 @@ pub enum HiberlogOut {
     File(Box<dyn Write>),
 }
 
-/// Define the hibernate logger state.
+/// Define the (singleton) hibernate logger state.
 struct Hiberlog {
     kmsg: File,
     start: Instant,
@@ -143,6 +129,7 @@ struct Hiberlog {
     to_kmsg: bool,
     out: HiberlogOut,
     pid: u32,
+    syslogger: BasicLogger,
 }
 
 impl Hiberlog {
@@ -152,6 +139,8 @@ impl Hiberlog {
             .write(true)
             .open(KMSG_PATH)
             .context("Failed to open kernel message logger")?;
+
+        let syslogger = create_syslogger();
         Ok(Hiberlog {
             kmsg,
             start: Instant::now(),
@@ -162,46 +151,40 @@ impl Hiberlog {
             to_kmsg: false,
             out: HiberlogOut::Syslog,
             pid: std::process::id(),
+            syslogger,
         })
     }
 
-    /// Log a message.
-    pub fn log(
-        &mut self,
-        pri: Priority,
-        fac: Facility,
-        file_line: Option<(&str, u32)>,
-        args: fmt::Arguments,
-    ) {
+    /// Log a record.
+    fn log_record(&mut self, record: &Record) {
         let mut buf = [0u8; 1024];
 
         // If sending to the syslog, just forward there and exit.
         if matches!(self.out, HiberlogOut::Syslog) {
-            sys_util::syslog::log(pri, fac, file_line, args);
+            self.syslogger.log(&record);
             return;
         }
 
         let res = {
             let mut buf_cursor = Cursor::new(&mut buf[..]);
-            let facprio = (pri as usize) + (fac as usize);
-            if let Some((file_name, line)) = &file_line {
+            let facprio = priority_from_level(record.level()) + (Facility::LOG_USER as usize);
+            if let Some(file) = record.file() {
                 let duration = self.start.elapsed();
                 write!(
                     &mut buf_cursor,
-                    "<{}>{}: {}.{:03} {} [{}:{}:{}] ",
+                    "<{}>{}: {}.{:03} {} [{}:{}] ",
                     facprio,
                     LOG_PREFIX,
                     duration.as_secs(),
                     duration.subsec_millis(),
                     self.pid,
-                    pri,
-                    file_name,
-                    line
+                    file,
+                    record.line().unwrap_or(0)
                 )
             } else {
                 write!(&mut buf_cursor, "<{}>{}: ", facprio, LOG_PREFIX)
             }
-            .and_then(|()| writeln!(&mut buf_cursor, "{}", args))
+            .and_then(|()| writeln!(&mut buf_cursor, "{}", record.args()))
             .map(|()| buf_cursor.position() as usize)
         };
 
@@ -269,7 +252,7 @@ impl Hiberlog {
     }
 
     /// Flush all complete pages of log lines.
-    fn flush_full_pages(&mut self) {
+    pub fn flush_full_pages(&mut self) {
         // Do nothing if buffering messages in memory.
         if matches!(self.out, HiberlogOut::BufferInMemory) {
             return;
@@ -308,7 +291,7 @@ impl Hiberlog {
                 Ok(v) => v,
                 Err(_) => continue,
             };
-            replay_line(s.to_string());
+            replay_line(&self.syslogger, s.to_string());
         }
 
         self.reset();
@@ -326,15 +309,11 @@ impl Hiberlog {
     }
 }
 
-pub fn log(pri: Priority, fac: Facility, file_line: Option<(&str, u32)>, args: fmt::Arguments) {
-    let mut state = lock!();
-    state.log(pri, fac, file_line, args)
-}
-
 /// Divert the log to a new output. This does not flush or reset the stream, the
 /// caller must decide what they want to do with buffered output before calling
 /// this.
 pub fn redirect_log(out: HiberlogOut) {
+    log::logger().flush();
     let mut state = lock!();
     state.to_kmsg = false;
     match out {
@@ -433,11 +412,12 @@ fn replay_log_file(file: &mut dyn Read, name: &str) {
         return;
     }
 
-    sys_util::syslog::log(
-        Priority::Info,
-        Facility::User,
-        None,
-        format_args!("Replaying {}:", name),
+    let syslogger = create_syslogger();
+    syslogger.log(
+        &Record::builder()
+            .args(format_args!("Replaying {}:", name))
+            .level(Level::Info)
+            .build(),
     );
     // Now split that big buffer into lines and feed it into the log.
     let len_without_delim = buf.len() - 1;
@@ -448,19 +428,19 @@ fn replay_log_file(file: &mut dyn Read, name: &str) {
             Err(_) => continue,
         };
 
-        replay_line(line);
+        replay_line(&syslogger, line);
     }
 
-    sys_util::syslog::log(
-        Priority::Info,
-        Facility::User,
-        None,
-        format_args!("Done replaying {}", name),
+    syslogger.log(
+        &Record::builder()
+            .args(format_args!("Done replaying {}", name))
+            .level(Level::Info)
+            .build(),
     );
 }
 
 /// Replay a single log line to the syslogger.
-fn replay_line(line: String) {
+fn replay_line(syslogger: &BasicLogger, line: String) {
     // The log lines are in kmsg format, like:
     // <11>hiberman: [src/hiberman.rs:529] Hello 2004
     // Trim off the first colon, everything after is line contents.
@@ -491,20 +471,47 @@ fn replay_line(line: String) {
         }
     };
 
-    // This is safe because all possible 8 values are defined in Priority.
-    let priority: Priority = priority_from_u8(facprio & 7);
-    sys_util::syslog::log(priority, Facility::User, None, format_args!("{}", contents));
+    let level = level_from_u8(facprio & 7);
+    syslogger.log(
+        &Record::builder()
+            .args(format_args!("{}", contents))
+            .level(level)
+            .build(),
+    );
 }
 
-fn priority_from_u8(value: u8) -> Priority {
+fn level_from_u8(value: u8) -> Level {
     match value {
-        0 => Priority::Emergency,
-        1 => Priority::Alert,
-        2 => Priority::Critical,
-        3 => Priority::Error,
-        4 => Priority::Warning,
-        5 => Priority::Notice,
-        6 => Priority::Info,
-        _ => Priority::Debug,
+        0 => Level::Error,
+        1 => Level::Error,
+        2 => Level::Error,
+        3 => Level::Error,
+        4 => Level::Warn,
+        5 => Level::Info,
+        6 => Level::Info,
+        7 => Level::Debug,
+        _ => Level::Debug,
     }
+}
+
+fn priority_from_level(level: Level) -> usize {
+    match level {
+        Level::Error => 3,
+        Level::Warn => 4,
+        Level::Info => 6,
+        Level::Debug => 7,
+        Level::Trace => 7,
+    }
+}
+
+fn create_syslogger() -> BasicLogger {
+    let formatter = Formatter3164 {
+        facility: Facility::LOG_USER,
+        hostname: None,
+        process: "hiberman".into(),
+        pid: std::process::id() as i32,
+    };
+
+    let logger = syslog::unix(formatter).expect("Could not connect to syslog");
+    BasicLogger::new(logger)
 }
