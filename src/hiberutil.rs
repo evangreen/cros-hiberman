@@ -86,18 +86,6 @@ pub struct ResumeOptions {
     pub no_preloader: bool,
 }
 
-/// Convert anything to a u8 slice.
-/// # Safety
-///
-/// This function is unsafe because it converts any data into a u8 slice,
-/// without regard for whether or not that data is fully initialized at every
-/// byte (for instance, structure padding). Callers must manually ensure they
-/// pass in pointers that can in fact be represented correctly as a slice of
-/// u8s.
-pub unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
-    ::std::slice::from_raw_parts((p as *const T) as *const u8, ::std::mem::size_of::<T>())
-}
-
 /// Get the page size on this system.
 pub fn get_page_size() -> usize {
     // Safe because sysconf() returns a long and has no other side effects.

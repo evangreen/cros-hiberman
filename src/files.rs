@@ -4,6 +4,7 @@
 
 //! High level support for creating and opening the files used by hibernate.
 
+use std::convert::TryInto;
 use std::fs::{create_dir, File, OpenOptions};
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
@@ -90,7 +91,7 @@ pub fn preallocate_hiberfile() -> Result<DiskFile> {
 
 /// Open a pre-existing disk file with bounce buffer,
 /// still with read and write permissions.
-pub fn open_bounced_disk_file(path: &Path) -> Result<BouncedDiskFile> {
+pub fn open_bounced_disk_file<P: AsRef<Path>>(path: P) -> Result<BouncedDiskFile> {
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -131,21 +132,17 @@ pub fn open_log_file(log_file: HiberlogFile) -> Result<BouncedDiskFile> {
 /// Helper function to get the total amount of physical memory on this system,
 /// in megabytes.
 fn get_total_memory_mb() -> u32 {
-    let pagesize = get_page_size() as i64;
-    let pagecount = get_total_memory_pages() as i64;
+    let pagesize = get_page_size() as u64;
+    let pagecount = get_total_memory_pages() as u64;
 
     debug!("Pagesize {} pagecount {}", pagesize, pagecount);
     let mb = pagecount * pagesize / (1024 * 1024);
-    if mb > 0xFFFFFFFF {
-        0xFFFFFFFFu32
-    } else {
-        mb as u32
-    }
+    mb.try_into().unwrap_or(u32::MAX)
 }
 
 /// Helper function used to preallocate space on a file using the fallocate64()
 /// C library call.
-fn preallocate_file(path: &Path, size: i64) -> Result<File> {
+fn preallocate_file<P: AsRef<Path>>(path: P, size: i64) -> Result<File> {
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -165,7 +162,7 @@ fn preallocate_file(path: &Path, size: i64) -> Result<File> {
 }
 
 /// Open a pre-existing disk file, still with read and write permissions.
-fn open_disk_file(path: &Path) -> Result<DiskFile> {
+fn open_disk_file<P: AsRef<Path>>(path: P) -> Result<DiskFile> {
     let mut file = OpenOptions::new()
         .read(true)
         .write(true)

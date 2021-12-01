@@ -115,7 +115,7 @@ impl Read for ImagePreloader<'_> {
 
             let chunk = self.chunks.front().unwrap();
 
-            assert!(self.chunk_offset < chunk.size);
+            debug_assert!(self.chunk_offset < chunk.size);
 
             let this_io_length = std::cmp::min(chunk.size - self.chunk_offset, length - offset);
             let buffer_slice = chunk.buffer.u8_slice();
@@ -127,7 +127,7 @@ impl Read for ImagePreloader<'_> {
             // Advance the position within the chunk.
             self.chunk_offset += this_io_length;
 
-            assert!(self.chunk_offset <= chunk.size);
+            debug_assert!(self.chunk_offset <= chunk.size);
 
             // If this chunk is fully consumed, pop it off the list and let the
             // buffer go free.

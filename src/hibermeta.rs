@@ -5,7 +5,7 @@
 //! Implement support for managing hibernate metadata.
 
 use std::convert::TryFrom;
-use std::io::{IoSliceMut, Read, Write};
+use std::io::{Read, Write};
 
 use anyhow::{Context, Result};
 use log::info;
@@ -179,29 +179,15 @@ impl HibernateMetadata {
     pub fn load_from_reader<R: Read>(mut reader: R) -> Result<Self> {
         // Read the public data area.
         let mut public_buf = vec![0u8; META_PUBLIC_SIZE];
-        let mut slice = [IoSliceMut::new(&mut public_buf)];
-        let bytes_read = reader
-            .read_vectored(&mut slice)
+        reader
+            .read_exact(&mut public_buf)
             .context("Cannot read hibernate metadata")?;
-        if bytes_read != public_buf.len() {
-            return Err(HibernateError::MetadataError(
-                "Read too few bytes".to_string(),
-            ))
-            .context("Cannot read hibernate metadata");
-        }
 
         // Read the private data area.
         let mut private_buf = [0u8; META_PRIVATE_SIZE];
-        let mut slice = [IoSliceMut::new(&mut private_buf)];
-        let bytes_read = reader
-            .read_vectored(&mut slice)
+        reader
+            .read_exact(&mut private_buf)
             .context("Cannot read hibernate metadata")?;
-        if bytes_read != private_buf.len() {
-            return Err(HibernateError::MetadataError(
-                "Read too few bytes".to_string(),
-            ))
-            .context("Cannot read hibernate metadata");
-        }
 
         // Deserialize the public metadata.
         let end = public_buf
@@ -341,16 +327,9 @@ impl HibernateMetadata {
             buf[META_PUBLIC_SIZE..end].copy_from_slice(&private);
         }
 
-        let bytes_written = disk_file
-            .write(&buf[..])
+        disk_file
+            .write_all(&buf[..])
             .context("Cannot write hibernate metadata")?;
-
-        if bytes_written != buf.len() {
-            return Err(HibernateError::MetadataError(
-                "Wrote too few bytes".to_string(),
-            ))
-            .context("Cannot save hibernate metadata");
-        }
 
         Ok(())
     }

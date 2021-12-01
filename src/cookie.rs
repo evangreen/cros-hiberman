@@ -5,11 +5,11 @@
 //! Manages the "valid resume image" cookie.
 
 use std::fs::{File, OpenOptions};
-use std::io::{IoSlice, IoSliceMut, Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 
 use crate::hiberutil::{path_to_stateful_block, HibernateError};
 use crate::mmapbuf::MmapBuffer;
@@ -62,7 +62,7 @@ const COOKIE_SIZE: usize = 16;
 impl HibernateCookie {
     /// Create a new HibernateCookie structure. This allocates resources but
     /// does not attempt to read or write the disk.
-    pub fn new(path: &Path) -> Result<HibernateCookie> {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<HibernateCookie> {
         let blockdev = OpenOptions::new()
             .read(true)
             .write(true)
@@ -77,19 +77,14 @@ impl HibernateCookie {
     /// Read the contents of the disk to determine if the cookie is set or not.
     /// On success, returns a boolean that is true if the hibernate cookie is
     /// set (indicating the on-disk file systems should not be altered).
-    pub fn read(&mut self) -> Result<bool> {
+    pub fn is_set(&mut self) -> Result<bool> {
         self.blockdev
             .seek(SeekFrom::Start(0))
             .context("Failed to seek in hibernate cookie")?;
         let buffer_slice = self.buffer.u8_slice_mut();
-        let mut slice_mut = [IoSliceMut::new(&mut buffer_slice[..COOKIE_READ_SIZE])];
-        let bytes_read = self
-            .blockdev
-            .read_vectored(&mut slice_mut)
+        self.blockdev
+            .read_exact(&mut buffer_slice[..COOKIE_READ_SIZE])
             .context("Failed to read hibernate cookie")?;
-        if bytes_read < COOKIE_READ_SIZE {
-            bail!("Only read {:x?} cookie bytes", bytes_read);
-        }
 
         // Verify there's a GPT header magic where there should be one.
         // This would catch cases like writing to the wrong place or the
@@ -121,7 +116,7 @@ impl HibernateCookie {
     /// altered), or poison value (false, indicating no impending hibernate
     /// resume, file systems can be mounted RW).
     pub fn write(&mut self, valid: bool) -> Result<()> {
-        let existing = self.read()?;
+        let existing = self.is_set()?;
         self.blockdev
             .seek(SeekFrom::Start(0))
             .context("Failed to seek hibernate cookie")?;
@@ -140,15 +135,9 @@ impl HibernateCookie {
         let buffer_slice = self.buffer.u8_slice_mut();
         buffer_slice[magic_start..magic_end].copy_from_slice(cookie);
         let end = COOKIE_WRITE_SIZE;
-        let slice = [IoSlice::new(&buffer_slice[..end])];
-        let bytes_written = self
-            .blockdev
-            .write_vectored(&slice)
+        self.blockdev
+            .write_all(&buffer_slice[..end])
             .context("Failed to write hibernate cookie")?;
-
-        if bytes_written < COOKIE_WRITE_SIZE {
-            bail!("Wrote only {:x?} hibernate cookie bytes", bytes_written);
-        }
 
         self.blockdev
             .flush()
@@ -164,29 +153,24 @@ impl HibernateCookie {
 /// Public function to read the hibernate cookie and return whether or not it is
 /// set. The optional path parameter contains the path to the disk to examine.
 /// If not supplied, the boot disk will be examined.
-pub fn get_hibernate_cookie(path_str: Option<&String>) -> Result<bool> {
+pub fn get_hibernate_cookie<P: AsRef<Path>>(path_str: Option<P>) -> Result<bool> {
     let mut cookie = open_hibernate_cookie(path_str)?;
-    cookie.read()
+    cookie.is_set()
 }
 
 /// Public function to set the hibernate cookie value. The valid parameter, if
 /// true, indicates that upon the next boot file systems should not be altered
 /// on disk, since there's a valid resume image. The optional path parameter
 /// contains the path to the disk to examine.
-pub fn set_hibernate_cookie(path_str: Option<&String>, valid: bool) -> Result<()> {
-    let mut cookie = open_hibernate_cookie(path_str)?;
+pub fn set_hibernate_cookie<P: AsRef<Path>>(path: Option<P>, valid: bool) -> Result<()> {
+    let mut cookie = open_hibernate_cookie(path)?;
     cookie.write(valid)
 }
 
-fn open_hibernate_cookie(path_str: Option<&String>) -> Result<HibernateCookie> {
-    let stateful_block;
-    let path = match path_str {
-        None => {
-            stateful_block = path_to_stateful_block()?;
-            Path::new(&stateful_block)
-        }
-        Some(p) => Path::new(p),
-    };
-
-    HibernateCookie::new(path)
+fn open_hibernate_cookie<P: AsRef<Path>>(path_ref: Option<P>) -> Result<HibernateCookie> {
+    if let Some(path) = path_ref {
+        HibernateCookie::new(path)
+    } else {
+        HibernateCookie::new(path_to_stateful_block()?)
+    }
 }

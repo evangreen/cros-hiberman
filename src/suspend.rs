@@ -13,7 +13,7 @@ use log::{debug, error, info, warn};
 use sys_util::syscall;
 
 use crate::cookie::set_hibernate_cookie;
-use crate::crypto::CryptoWriter;
+use crate::crypto::{CryptoWriter, Mode};
 use crate::diskfile::{BouncedDiskFile, DiskFile};
 use crate::files::{
     create_hibernate_dir, preallocate_header_file, preallocate_hiberfile, preallocate_log_file,
@@ -193,7 +193,7 @@ impl SuspendConductor {
                 mover_dest,
                 &self.metadata.data_key,
                 &self.metadata.data_iv,
-                true,
+                Mode::Encrypt,
                 page_size * BUFFER_PAGES,
             )?;
             mover_dest = &mut encryptor;

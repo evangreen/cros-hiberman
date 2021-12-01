@@ -215,7 +215,7 @@ impl Hiberlog {
         }
 
         if let HiberlogOut::File(f) = &mut self.out {
-            let _ = f.write(&buf[..]);
+            let _ = f.write_all(&buf[..]);
         }
 
         self.pending_size -= length;
@@ -324,7 +324,7 @@ pub fn clear_log_file(file: &mut BouncedDiskFile) -> Result<()> {
     let mut buf = [0u8; FLUSH_THRESHOLD];
     buf[0] = b'\n';
     file.rewind()?;
-    file.write(&buf).context("Failed to clear log file")?;
+    file.write_all(&buf).context("Failed to clear log file")?;
     Ok(())
 }
 

@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use log::{debug, error, info, warn};
 
 use crate::cookie::set_hibernate_cookie;
-use crate::crypto::CryptoReader;
+use crate::crypto::{CryptoReader, Mode};
 use crate::dbus::HiberDbusConnection;
 use crate::diskfile::{BouncedDiskFile, DiskFile};
 use crate::files::{open_header_file, open_hiberfile, open_log_file, open_metafile};
@@ -206,18 +206,10 @@ impl ResumeConductor {
 
             // Also write the first data byte, which is what actually triggers
             // the kernel to do its big allocation.
-            let bytes_written = snap_dev
+            snap_dev
                 .file
-                .write(std::slice::from_ref(&self.metadata.first_data_byte))
+                .write_all(std::slice::from_ref(&self.metadata.first_data_byte))
                 .context("Failed to write first byte to snapshot")?;
-
-            if bytes_written != 1 {
-                return Err(HibernateError::IoSizeError(format!(
-                    "Wrote only {} of 1 byte",
-                    bytes_written
-                )))
-                .context("Failed to write first byte to snapshot");
-            }
 
             // By now the kernel has done its own allocation for hibernate image
             // space. We can use the remaining memory to preload from disk.
@@ -248,7 +240,7 @@ impl ResumeConductor {
                 mover_source,
                 &metadata.data_key,
                 &metadata.data_iv,
-                false,
+                Mode::Decrypt,
                 page_size * BUFFER_PAGES,
             )?;
 

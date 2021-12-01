@@ -14,7 +14,7 @@ use libc::c_void;
 use log::{debug, error};
 use sys_util::ioctl_iowr_nr;
 
-use crate::hiberutil::{any_as_u8_slice, HibernateError};
+use crate::hiberutil::HibernateError;
 
 ioctl_iowr_nr!(FS_IOC_FIEMAP, 'f' as u32, 11, C_Fiemap);
 /// Define the Linux ioctl number for getting the fiemap.
@@ -167,7 +167,7 @@ impl Fiemap {
                 .context("Failed to get fiemap extent count");
         }
 
-        Ok(param.fm_mapped_extents as u32)
+        Ok(param.fm_mapped_extents)
     }
 
     /// Execute the ioctl to get the extents, and convert them back to an array
@@ -197,7 +197,11 @@ impl Fiemap {
         // safe because the buffer was allocated to be larger than this struct
         // size, and the structure contains no padding bytes.
         unsafe {
-            buffer[0..fiemap_len].copy_from_slice(any_as_u8_slice(&fiemap));
+            let fiemap_slice = ::std::slice::from_raw_parts(
+                (&fiemap as *const C_Fiemap) as *const u8,
+                ::std::mem::size_of::<C_Fiemap>(),
+            );
+            buffer[0..fiemap_len].copy_from_slice(fiemap_slice);
         }
 
         // Safe because the ioctl operates on a buffer bounded by the length we

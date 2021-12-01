@@ -13,9 +13,6 @@ path = "src/hiberman.rs"
 name = "hiberman"
 path = "src/main.rs"
 
-[profile.release]
-overflow-checks = true
-
 [dependencies]
 anyhow = "1.0.0"
 getopts = "0.2"

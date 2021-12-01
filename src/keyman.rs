@@ -8,7 +8,7 @@
 use std::convert::TryInto;
 use std::fs::create_dir;
 use std::fs::File;
-use std::io::{IoSlice, Read, Write};
+use std::io::{Read, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -80,17 +80,9 @@ impl HibernateKeyManager {
 
         assert!(public_key.len() == META_ASYMMETRIC_KEY_SIZE);
 
-        let slice = [IoSlice::new(&public_key)];
-        let bytes_written = key_file
-            .write_vectored(&slice)
+        key_file
+            .write_all(&public_key)
             .context("Failed to write public key")?;
-
-        if bytes_written != public_key.len() {
-            return Err(HibernateError::KeyManagerError(
-                "Wrote too few bytes".to_string(),
-            ))
-            .context("Failed to save public key");
-        }
 
         Ok(())
     }

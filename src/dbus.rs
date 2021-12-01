@@ -4,7 +4,7 @@
 
 //! Handles the D-Bus interface for hibernate.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -14,6 +14,7 @@ use dbus::channel::MatchingReceiver;
 use dbus::message::MatchRule;
 use dbus_crossroads::{Context, Crossroads};
 use log::{debug, error, info};
+use sync::Mutex;
 
 use crate::hiberutil::HibernateError;
 
@@ -80,8 +81,7 @@ impl HiberDbusConnectionInternal {
                 (),
                 move |_ctx: &mut Context, state: &mut HibernateDbusState, (seed,): (Vec<u8>,)| {
                     // Here's what happens when the method is called.
-                    let HibernateDbusState(state) = state;
-                    state.lock().unwrap().set_seed_material(&seed);
+                    state.0.lock().set_seed_material(&seed);
                     Ok(())
                 },
             );
@@ -117,7 +117,7 @@ impl HiberDbusConnectionInternal {
                 .process(Duration::from_millis(30000))
                 .context("Failed to process")?;
             let HibernateDbusState(state) = &self.state;
-            let state = state.lock().unwrap();
+            let state = state.lock();
             if state.call_count > 0 {
                 break;
             }
@@ -150,7 +150,7 @@ impl HiberDbusConnection {
         let arc_clone = Arc::clone(&self.internal);
         self.thread = Some(thread::spawn(move || {
             debug!("Started dbus server thread");
-            let mut conn = arc_clone.lock().unwrap();
+            let mut conn = arc_clone.lock();
             let _ = conn.receive_seed();
             debug!("Exiting dbus server thread");
         }));
@@ -170,9 +170,9 @@ impl HiberDbusConnection {
 
         // Now grab the internal connection, grab the state, and grab the seed
         // material.
-        let internal = self.internal.lock().unwrap();
+        let internal = self.internal.lock();
         let HibernateDbusState(state) = &internal.state;
-        let state = state.lock().unwrap();
+        let state = state.lock();
         let length = state.seed_material.len();
         if length < MINIMUM_SEED_SIZE {
             return Err(HibernateError::DbusError(format!(
@@ -190,7 +190,7 @@ impl HiberDbusConnection {
     /// get_seed_material() this function does not block if the seed material is
     /// not available.
     pub fn has_seed_material(&self) -> bool {
-        let internal = self.internal.lock().unwrap();
+        let internal = self.internal.lock();
         let HibernateDbusState(state) = &internal.state;
         // Attempt to get the lock on the inner state. Since the thread holds it
         // while it's running, and exits as soon as the seed material is given,

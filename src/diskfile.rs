@@ -241,17 +241,9 @@ impl Read for DiskFile {
             // Get a slice of the portion of the buffer to be read into, and read from
             // the block device into the slice.
             let end = offset + this_io_length;
-            let mut slice = [IoSliceMut::new(&mut buf[offset..end])];
-            let bytes_done = self.blockdev.read_vectored(&mut slice)?;
-            if bytes_done != this_io_length && self.logging {
-                error!(
-                    "DiskFile only did {:x?}/{:x?} I/O",
-                    bytes_done, this_io_length
-                );
-            }
-
-            self.current_position += bytes_done as u64;
-            offset += bytes_done;
+            self.blockdev.read_exact(&mut buf[offset..end])?;
+            self.current_position += this_io_length as u64;
+            offset += this_io_length;
         }
 
         Ok(offset)
@@ -283,17 +275,9 @@ impl Write for DiskFile {
             // Get a slice of the portion of the buffer to be read into, and read from
             // the block device into the slice.
             let end = offset + this_io_length;
-            let slice = [IoSlice::new(&buf[offset..end])];
-            let bytes_done = self.blockdev.write_vectored(&slice)?;
-            if bytes_done != this_io_length && self.logging {
-                error!(
-                    "DiskFile only wrote {:x?}/{:x?} I/O",
-                    bytes_done, this_io_length
-                );
-            }
-
-            self.current_position += bytes_done as u64;
-            offset += bytes_done;
+            self.blockdev.write_all(&buf[offset..end])?;
+            self.current_position += this_io_length as u64;
+            offset += this_io_length;
         }
 
         Ok(offset)
@@ -320,8 +304,8 @@ impl Seek for DiskFile {
             pos = self.fiemap.file_size as i64;
         }
 
-        let pos = pos as u64;
-        self.current_extent = match self.fiemap.extent_for_offset(pos) {
+        let new_position = pos as u64;
+        let extent = match self.fiemap.extent_for_offset(new_position) {
             None => {
                 return Err(IoError::new(
                     ErrorKind::InvalidInput,
@@ -331,13 +315,19 @@ impl Seek for DiskFile {
             Some(e) => *e,
         };
 
-        self.current_position = pos;
-        let delta = self.current_position - self.current_extent.fe_logical;
-        let block_offset = self.current_extent.fe_physical + delta;
+        let delta = new_position - extent.fe_logical;
+        let block_offset = extent.fe_physical + delta;
         if self.logging {
             debug!("Seeking to {:x}", block_offset);
         }
 
-        self.blockdev.seek(SeekFrom::Start(block_offset))
+        let seeked_offset = self.blockdev.seek(SeekFrom::Start(block_offset))?;
+        if seeked_offset != block_offset {
+            return Err(IoError::new(ErrorKind::Other, "Failed to seek DiskFile"));
+        }
+
+        self.current_position = new_position;
+        self.current_extent = extent;
+        Ok(new_position)
     }
 }

@@ -82,8 +82,8 @@ With this in mind, hiberman will do the following to hibernate the system:
  * Encrypt the random symmetric key using the public key. Save the result along
    with some other metadata like the image size into a preallocated metadata
    file.
- * Set a cookie at a known location towards on disk indicating there's a valid
-   hibernate image
+ * Set a cookie at a known location towards the beginning of the disk indicating
+   there's a valid hibernate image
  * Shut the system down
 
 Resume is slightly harder to follow, because there is the "resume" path, the

@@ -6,8 +6,10 @@
 
 use std::io::{Read, Write};
 
+pub use openssl::symm::Mode;
+
 use anyhow::{Context, Result};
-use openssl::symm::{Cipher, Crypter, Mode};
+use openssl::symm::{Cipher, Crypter};
 
 use crate::hibermeta::{META_SYMMETRIC_IV_SIZE, META_SYMMETRIC_KEY_SIZE};
 use crate::mmapbuf::MmapBuffer;
@@ -36,15 +38,10 @@ impl<'a> CryptoWriter<'a> {
         dest_file: &'a mut dyn Write,
         key: &[u8],
         iv: &[u8],
-        encrypt: bool,
+        mode: Mode,
         buffer_size: usize,
     ) -> Result<Self> {
         let cipher = Cipher::aes_128_cbc();
-        let mode = if encrypt {
-            Mode::Encrypt
-        } else {
-            Mode::Decrypt
-        };
 
         assert!(key.len() == META_SYMMETRIC_KEY_SIZE);
         assert!(iv.len() == META_SYMMETRIC_IV_SIZE);
@@ -150,15 +147,10 @@ impl<'a> CryptoReader<'a> {
         source_file: &'a mut dyn Read,
         key: &[u8],
         iv: &[u8],
-        encrypt: bool,
+        mode: Mode,
         buffer_size: usize,
     ) -> Result<Self> {
         let cipher = Cipher::aes_128_cbc();
-        let mode = if encrypt {
-            Mode::Encrypt
-        } else {
-            Mode::Decrypt
-        };
 
         assert!(key.len() == META_SYMMETRIC_KEY_SIZE);
         assert!(key.len() == META_SYMMETRIC_IV_SIZE);
@@ -190,7 +182,7 @@ impl Read for CryptoReader<'_> {
         let source_buf = self.buffer.u8_slice_mut();
 
         // There's currently no need for the complexity of partial blocks.
-        assert!(
+        debug_assert!(
             (length % CRYPTO_BLOCK_SIZE) == 0,
             "Encryption requested I/O length {} not a multiple of {}",
             length,

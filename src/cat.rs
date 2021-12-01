@@ -4,7 +4,7 @@
 
 //! Implement the cat debug command
 
-use std::io::{Read, Write};
+use std::io::{copy, Read, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -20,27 +20,16 @@ use crate::files::open_bounced_disk_file;
 /// argument tells the function to stop after the first blank newline is found,
 /// which is also the stopping condition used to replay log files (since the
 /// size is fixed at creation time).
-pub fn cat_disk_file(path_str: &str, is_log: bool) -> Result<()> {
-    let path = Path::new(path_str);
+pub fn cat_disk_file<P: AsRef<Path>>(path: P, is_log: bool) -> Result<()> {
     let mut file = open_bounced_disk_file(path)?;
     let mut stdout = std::io::stdout();
     if is_log {
         let mut buf = Vec::<u8>::new();
         file.read_to_end(&mut buf)
             .context("Failed to read log file")?;
-        stdout.write(&buf).context("Failed to print log file")?;
+        stdout.write_all(&buf).context("Failed to print log file")?;
     } else {
-        let mut buf = vec![0u8; 4096];
-        loop {
-            let bytes_read = file.read(&mut buf).context("Failed to read disk file")?;
-            if bytes_read == 0 {
-                break;
-            }
-
-            stdout
-                .write(&buf[..bytes_read])
-                .context("Failed to print")?;
-        }
+        let _ = copy(&mut file, &mut stdout)?;
     }
 
     Ok(())
