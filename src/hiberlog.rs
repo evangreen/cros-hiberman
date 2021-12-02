@@ -133,7 +133,7 @@ impl Hiberlog {
 
         // If sending to the syslog, just forward there and exit.
         if matches!(self.out, HiberlogOut::Syslog) {
-            self.syslogger.log(&record);
+            self.syslogger.log(record);
             return;
         }
 

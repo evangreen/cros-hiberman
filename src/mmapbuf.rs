@@ -28,7 +28,7 @@ impl MmapBuffer {
         let addr: *const u8 = std::ptr::null();
         let prot = libc::PROT_READ | libc::PROT_WRITE;
         let flags = libc::MAP_PRIVATE | libc::MAP_ANON;
-        // Safe because anonymouse mmap buffers are always returned zeroed.
+        // Safe because anonymous mmap buffers are always returned zeroed.
         let r = unsafe { libc::mmap(addr as *mut c_void, len as libc::size_t, prot, flags, -1, 0) };
 
         if r == libc::MAP_FAILED {
