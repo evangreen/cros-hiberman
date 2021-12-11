@@ -32,7 +32,6 @@ pub const DEFAULT_DBUS_TIMEOUT: Duration = Duration::from_secs(25);
 /// trait.
 struct HibernateDbusStateInternal {
     call_count: u32,
-    seed_material: Vec<u8>,
     account_id: String,
     barrier: Arc<Barrier>,
 }
@@ -41,18 +40,9 @@ impl HibernateDbusStateInternal {
     fn new() -> Self {
         Self {
             call_count: 0,
-            seed_material: vec![],
             account_id: String::new(),
             barrier: Arc::new(Barrier::new(2)),
         }
-    }
-
-    /// D-bus method called by cryptohome to set secret seed material derived
-    /// from user authentication.
-    fn set_seed_material(&mut self, seed: &[u8]) {
-        info!("Received {} bytes of seed material", seed.len());
-        self.call_count += 1;
-        self.seed_material = seed.to_owned();
     }
 
     /// D-bus method called by login_manager to let the hibernate service
@@ -93,26 +83,6 @@ impl HiberDbusConnectionInternal {
             .context("Failed to request dbus name")?;
 
         let mut crossroads = Crossroads::new();
-        // Build a new HibernateSeedInterface.
-        let iface_token = crossroads.register("org.chromium.HibernateSeedInterface", |b| {
-            // Let's add a method to the interface. We have the method name,
-            // followed by names of input and output arguments (used for
-            // introspection). The closure then controls the types of these
-            // arguments. The last argument to the closure is a tuple of the
-            // input arguments.
-            b.method(
-                "SetSeedMaterial",
-                ("seed",),
-                (),
-                move |_ctx: &mut Context, state: &mut HibernateDbusState, (seed,): (Vec<u8>,)| {
-                    // Here's what happens when the method is called.
-                    state.0.lock().set_seed_material(&seed);
-                    Ok(())
-                },
-            );
-        });
-
-        crossroads.insert("/org/chromium/Hibernate", &[iface_token], state.clone());
         // Build a new HibernateResumeInterface.
         let iface_token = crossroads.register("org.chromium.HibernateResumeInterface", |b| {
             b.method(
