@@ -6,12 +6,15 @@
 
 use std::io::{Read, Write};
 
-pub use openssl::symm::Mode;
+use openssl::symm::Mode;
 
 use anyhow::{Context, Result};
+use log::warn;
 use openssl::symm::{Cipher, Crypter};
 
-use crate::hibermeta::{META_SYMMETRIC_IV_SIZE, META_SYMMETRIC_KEY_SIZE};
+use crate::hibermeta::{
+    META_OCB_IV_SIZE, META_SYMMETRIC_IV_SIZE, META_SYMMETRIC_KEY_SIZE, META_TAG_SIZE,
+};
 use crate::mmapbuf::MmapBuffer;
 
 /// Define the size of a symmetric encryption block. If the encryption algorithm
@@ -21,12 +24,20 @@ const CRYPTO_BLOCK_SIZE: usize = META_SYMMETRIC_KEY_SIZE;
 /// The CryptoWriter is an object that can be inserted in the image pipeline on
 /// the "write" side (in other words, somewhere on the destination side of the
 /// ImageMover). When written to, it will encrypt or decrypt contents and then
-/// pass them on to its pre-arranged destination.
+/// pass them on to its pre-arranged destination. It also has an unencrypted
+/// passthrough mode for debug and testing.
 pub struct CryptoWriter<'a> {
     crypter: Crypter,
     dest_file: &'a mut dyn Write,
     buffer: MmapBuffer,
     buffer_size: usize,
+    unencrypted: bool,
+}
+
+pub enum CryptoMode {
+    Encrypt,
+    Decrypt,
+    Unencrypted,
 }
 
 impl<'a> CryptoWriter<'a> {
@@ -38,18 +49,29 @@ impl<'a> CryptoWriter<'a> {
         dest_file: &'a mut dyn Write,
         key: &[u8],
         iv: &[u8],
-        mode: Mode,
+        mode: CryptoMode,
         buffer_size: usize,
     ) -> Result<Self> {
-        let cipher = Cipher::aes_128_cbc();
+        let cipher = Cipher::aes_128_ocb();
 
         assert!(key.len() == META_SYMMETRIC_KEY_SIZE);
-        assert!(iv.len() == META_SYMMETRIC_IV_SIZE);
+        assert!(iv.len() == META_OCB_IV_SIZE);
+
+        let (unencrypted, openssl_mode) = match mode {
+            CryptoMode::Encrypt => (false, Mode::Encrypt),
+            CryptoMode::Decrypt => (false, Mode::Decrypt),
+            CryptoMode::Unencrypted => (true, Mode::Encrypt),
+        };
+
+        if unencrypted {
+            warn!("Warning: The hibernate image is unencrypted");
+        }
 
         // This is not expected to fail, since it would indicate we are passing
         // nutty parameters, which we are not.
-        let mut crypter = Crypter::new(cipher, mode, key, Some(iv)).unwrap();
+        let mut crypter = Crypter::new(cipher, openssl_mode, key, Some(iv)).unwrap();
         crypter.pad(false);
+        crypter.set_tag_len(META_TAG_SIZE)?;
         // Pad the buffer not only for alignment, but because Crypter::Update()
         // wants an extra block in the output buffer in case there were
         // leftovers from last time.
@@ -60,7 +82,24 @@ impl<'a> CryptoWriter<'a> {
             dest_file,
             buffer,
             buffer_size,
+            unencrypted,
         })
+    }
+
+    /// Get the authentication tag, which is used later during decryption to
+    /// ensure the image contents weren't modified. This must be called exactly
+    /// once after all data has been written.
+    pub fn get_tag(&mut self) -> Result<[u8; META_TAG_SIZE]> {
+        let mut unused = [0u8; CRYPTO_BLOCK_SIZE];
+        let crypto_count = self.crypter.finalize(&mut unused).unwrap();
+
+        // There shouldn't be any leftovers, as we always
+        // encrypted/decrypted in block sized chunks.
+        assert!(crypto_count == 0);
+
+        let mut tag = [0u8; META_TAG_SIZE];
+        self.crypter.get_tag(&mut tag)?;
+        Ok(tag)
     }
 }
 
@@ -76,6 +115,10 @@ impl Write for CryptoWriter<'_> {
             length,
             CRYPTO_BLOCK_SIZE
         );
+
+        if self.unencrypted {
+            return self.dest_file.write(buf);
+        }
 
         // Loop converting internal buffer sized chunks.
         while offset < length {
@@ -135,6 +178,7 @@ pub struct CryptoReader<'a> {
     extra: MmapBuffer,
     extra_offset: usize,
     extra_size: usize,
+    unencrypted: bool,
 }
 
 impl<'a> CryptoReader<'a> {
@@ -147,18 +191,29 @@ impl<'a> CryptoReader<'a> {
         source_file: &'a mut dyn Read,
         key: &[u8],
         iv: &[u8],
-        mode: Mode,
+        mode: CryptoMode,
         buffer_size: usize,
     ) -> Result<Self> {
-        let cipher = Cipher::aes_128_cbc();
+        let cipher = Cipher::aes_128_ocb();
 
         assert!(key.len() == META_SYMMETRIC_KEY_SIZE);
         assert!(key.len() == META_SYMMETRIC_IV_SIZE);
 
+        let (unencrypted, openssl_mode) = match mode {
+            CryptoMode::Encrypt => (false, Mode::Encrypt),
+            CryptoMode::Decrypt => (false, Mode::Decrypt),
+            CryptoMode::Unencrypted => (true, Mode::Encrypt),
+        };
+
+        if unencrypted {
+            warn!("Warning: The resume image is unencrypted");
+        }
+
         // This is not expected to fail, since it would indicate we are passing
         // nutty parameters, which we are not.
-        let mut crypter = Crypter::new(cipher, mode, key, Some(iv)).unwrap();
+        let mut crypter = Crypter::new(cipher, openssl_mode, key, Some(iv)).unwrap();
         crypter.pad(false);
+        crypter.set_tag_len(META_TAG_SIZE)?;
         let buffer = MmapBuffer::new(buffer_size).context("Failed to create staging buffer")?;
         let extra = MmapBuffer::new(buffer_size + CRYPTO_BLOCK_SIZE)
             .context("Failed to create extra buffer")?;
@@ -170,7 +225,30 @@ impl<'a> CryptoReader<'a> {
             extra,
             extra_offset: 0,
             extra_size: 0,
+            unencrypted,
         })
+    }
+
+    /// Check that the given authentication tag is correct, confirming that the
+    /// decrypted data has not been tampered with while it was encrypted. This
+    /// must be called exactly once after all data has been passed.
+    pub fn check_tag(&mut self, tag: &[u8]) -> Result<()> {
+        assert!(tag.len() == META_TAG_SIZE);
+
+        if self.unencrypted {
+            return Ok(());
+        }
+
+        let mut unused = [0u8; CRYPTO_BLOCK_SIZE];
+        self.crypter.set_tag(tag)?;
+        let crypto_count = self
+            .crypter
+            .finalize(&mut unused)
+            .context("Failed to finalize CryptoReader")?;
+
+        assert!(crypto_count == 0);
+
+        Ok(())
     }
 }
 
@@ -188,6 +266,10 @@ impl Read for CryptoReader<'_> {
             length,
             CRYPTO_BLOCK_SIZE
         );
+
+        if self.unencrypted {
+            return self.source_file.read(buf);
+        }
 
         // Loop converting internal buffer sized chunks.
         while offset < length {
