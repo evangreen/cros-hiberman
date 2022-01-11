@@ -17,4 +17,17 @@
     <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
   </method>
 </interface>
+  <interface name="org.chromium.HibernateResumeInterface">
+    <!--
+    ResumeFromHibernate:
+
+    Executes a resume from hibernation, if a viable resume image is present.
+    Otherwise, executes any preparations needed to perform a hibernation at a
+    later time.
+    -->
+    <method name="ResumeFromHibernate">
+      <arg name="account_id" direction="in" type="s" />
+      <annotation name="org.chromium.DBus.Method.Kind" value="simple"/>
+    </method>
+  </interface>
 </node>
