@@ -31,7 +31,7 @@ pub struct CryptoWriter<'a> {
     dest_file: &'a mut dyn Write,
     buffer: MmapBuffer,
     buffer_size: usize,
-    unencrypted: bool,
+    mode: CryptoMode,
 }
 
 pub enum CryptoMode {
@@ -57,13 +57,14 @@ impl<'a> CryptoWriter<'a> {
         assert!(key.len() == META_SYMMETRIC_KEY_SIZE);
         assert!(iv.len() == META_OCB_IV_SIZE);
 
-        let (unencrypted, openssl_mode) = match mode {
-            CryptoMode::Encrypt => (false, Mode::Encrypt),
-            CryptoMode::Decrypt => (false, Mode::Decrypt),
-            CryptoMode::Unencrypted => (true, Mode::Encrypt),
+        let openssl_mode = match mode {
+            CryptoMode::Encrypt => Mode::Encrypt,
+            CryptoMode::Decrypt => Mode::Decrypt,
+            // Never passed to openssl, so just pick something.
+            CryptoMode::Unencrypted => Mode::Encrypt,
         };
 
-        if unencrypted {
+        if matches!(mode, CryptoMode::Unencrypted) {
             warn!("Warning: The hibernate image is unencrypted");
         }
 
@@ -82,7 +83,7 @@ impl<'a> CryptoWriter<'a> {
             dest_file,
             buffer,
             buffer_size,
-            unencrypted,
+            mode,
         })
     }
 
@@ -91,7 +92,10 @@ impl<'a> CryptoWriter<'a> {
     /// once after all data has been written.
     pub fn get_tag(&mut self) -> Result<[u8; META_TAG_SIZE]> {
         let mut unused = [0u8; CRYPTO_BLOCK_SIZE];
-        let crypto_count = self.crypter.finalize(&mut unused).unwrap();
+        let crypto_count = self
+            .crypter
+            .finalize(&mut unused)
+            .context("Failed to finalize CryptoWriter")?;
 
         // There shouldn't be any leftovers, as we always
         // encrypted/decrypted in block sized chunks.
@@ -116,7 +120,7 @@ impl Write for CryptoWriter<'_> {
             CRYPTO_BLOCK_SIZE
         );
 
-        if self.unencrypted {
+        if matches!(self.mode, CryptoMode::Unencrypted) {
             return self.dest_file.write(buf);
         }
 
@@ -178,7 +182,7 @@ pub struct CryptoReader<'a> {
     extra: MmapBuffer,
     extra_offset: usize,
     extra_size: usize,
-    unencrypted: bool,
+    mode: CryptoMode,
 }
 
 impl<'a> CryptoReader<'a> {
@@ -199,13 +203,14 @@ impl<'a> CryptoReader<'a> {
         assert!(key.len() == META_SYMMETRIC_KEY_SIZE);
         assert!(key.len() == META_SYMMETRIC_IV_SIZE);
 
-        let (unencrypted, openssl_mode) = match mode {
-            CryptoMode::Encrypt => (false, Mode::Encrypt),
-            CryptoMode::Decrypt => (false, Mode::Decrypt),
-            CryptoMode::Unencrypted => (true, Mode::Encrypt),
+        let openssl_mode = match mode {
+            CryptoMode::Encrypt => Mode::Encrypt,
+            CryptoMode::Decrypt => Mode::Decrypt,
+            // Not passed to openssl, so just pick something.
+            CryptoMode::Unencrypted => Mode::Encrypt,
         };
 
-        if unencrypted {
+        if matches!(mode, CryptoMode::Unencrypted) {
             warn!("Warning: The resume image is unencrypted");
         }
 
@@ -225,7 +230,7 @@ impl<'a> CryptoReader<'a> {
             extra,
             extra_offset: 0,
             extra_size: 0,
-            unencrypted,
+            mode,
         })
     }
 
@@ -235,7 +240,7 @@ impl<'a> CryptoReader<'a> {
     pub fn check_tag(&mut self, tag: &[u8]) -> Result<()> {
         assert!(tag.len() == META_TAG_SIZE);
 
-        if self.unencrypted {
+        if matches!(self.mode, CryptoMode::Unencrypted) {
             return Ok(());
         }
 
@@ -267,7 +272,7 @@ impl Read for CryptoReader<'_> {
             CRYPTO_BLOCK_SIZE
         );
 
-        if self.unencrypted {
+        if matches!(self.mode, CryptoMode::Unencrypted) {
             return self.source_file.read(buf);
         }
 
