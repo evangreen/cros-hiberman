@@ -20,6 +20,7 @@ use sync::Mutex;
 use system_api::client::OrgChromiumUserDataAuthInterface;
 use system_api::rpc::AccountIdentifier;
 use system_api::UserDataAuth::{GetHibernateSecretReply, GetHibernateSecretRequest};
+use zeroize::Zeroize;
 
 use crate::hiberutil::HibernateError;
 
@@ -173,6 +174,21 @@ impl HiberDbusConnectionInternal {
     }
 }
 
+#[derive(Default, Zeroize)]
+#[zeroize(drop)]
+pub struct ResumeSecretSeed {
+    pub value: Vec<u8>,
+}
+
+/// This struct serves as a ticket indicating that the dbus thread is currently
+/// blocked in the ResumeFromHibernate method.
+pub struct PendingResumeCall {
+    pub secret_seed: ResumeSecretSeed,
+    // When this resume request is dropped, the dbus thread allows the method
+    // call to complete.
+    _resume_request: ResumeRequest,
+}
+
 /// Define the thread safe version of the dbus connection state.
 pub struct HiberDbusConnection {
     internal: Arc<Mutex<HiberDbusConnectionInternal>>,
@@ -220,8 +236,16 @@ impl HiberDbusConnection {
         }
 
         info!("Requesting secret seed");
-        let secret_seed = get_secret_seed(&resume_request.account_id)?;
-        let length = secret_seed.len();
+        let mut pending_call = PendingResumeCall {
+            secret_seed: ResumeSecretSeed::default(),
+            _resume_request: resume_request,
+        };
+
+        get_secret_seed(
+            &pending_call._resume_request.account_id,
+            &mut pending_call.secret_seed.value,
+        )?;
+        let length = pending_call.secret_seed.value.len();
         if length < MINIMUM_SEED_SIZE {
             return Err(HibernateError::DbusError(format!(
                 "Seed size {} was below minium {}",
@@ -231,25 +255,15 @@ impl HiberDbusConnection {
         }
 
         info!("Got {} bytes of seed material", length);
-        Ok(PendingResumeCall {
-            secret_seed,
-            _resume_request: resume_request,
-        })
+        Ok(pending_call)
     }
 }
 
-/// This struct serves as a ticket indicating that the dbus thread is currently
-/// blocked in the ResumeFromHibernate method.
-pub struct PendingResumeCall {
-    pub secret_seed: Vec<u8>,
-    // When this resume request is dropped, the dbus thread allows the method
-    // call to complete.
-    _resume_request: ResumeRequest,
-}
-
 /// Ask cryptohome for the hibernate seed for the given account. This call only
-/// works once, then cryptohome forgets the secret.
-fn get_secret_seed(account_id: &str) -> Result<Vec<u8>> {
+/// works once, then cryptohome forgets the secret. The vector receiving the
+/// secret is passed in rather than being returned so its memory location can be
+/// accounted for and explicitly zeroed out when no longer needed.
+fn get_secret_seed(account_id: &str, seed: &mut Vec<u8>) -> Result<()> {
     let conn = Connection::new_system().context("Failed to connect to dbus for secret seed")?;
     let conn_path = conn.with_proxy(
         "org.chromium.UserDataAuth",
@@ -261,10 +275,16 @@ fn get_secret_seed(account_id: &str) -> Result<Vec<u8>> {
     let mut account_identifier = AccountIdentifier::new();
     account_identifier.set_account_id(account_id.to_string());
     proto.account_id = SingularPtrField::some(account_identifier);
-    let response = conn_path
+    let mut response = conn_path
         .get_hibernate_secret(proto.write_to_bytes().unwrap())
         .context("Failed to call GetHibernateSecret dbus method")?;
-    let response: GetHibernateSecretReply = Message::parse_from_bytes(&response)
+    let mut reply: GetHibernateSecretReply = Message::parse_from_bytes(&response)
         .context("Failed to parse GetHibernateSecret dbus response")?;
-    Ok(response.hibernate_secret)
+    response.zeroize();
+    // Copy the secret to the output parameter so the reply structure can be
+    // zeroed.
+    seed.resize(reply.hibernate_secret.len(), 0);
+    seed.copy_from_slice(&reply.hibernate_secret);
+    reply.hibernate_secret.fill(0);
+    Ok(())
 }
