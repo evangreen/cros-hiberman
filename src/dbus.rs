@@ -249,7 +249,7 @@ pub struct PendingResumeCall {
 
 /// Ask cryptohome for the hibernate seed for the given account. This call only
 /// works once, then cryptohome forgets the secret.
-fn get_secret_seed(account_id: &String) -> Result<Vec<u8>> {
+fn get_secret_seed(account_id: &str) -> Result<Vec<u8>> {
     let conn = Connection::new_system().context("Failed to connect to dbus for secret seed")?;
     let conn_path = conn.with_proxy(
         "org.chromium.UserDataAuth",

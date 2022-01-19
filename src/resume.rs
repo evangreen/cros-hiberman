@@ -156,12 +156,12 @@ impl ResumeConductor {
     }
 
     /// Load the resume image from disk into memory.
-    fn read_image<'a>(
+    fn read_image(
         &mut self,
         mut header_file: DiskFile,
         mut hiber_file: DiskFile,
         snap_dev: &mut SnapshotDevice,
-        dbus_connection: &'a mut HiberDbusConnection,
+        dbus_connection: &mut HiberDbusConnection,
     ) -> Result<Option<PendingResumeCall>> {
         let page_size = get_page_size();
         let mut image_size = self.metadata.image_size;
