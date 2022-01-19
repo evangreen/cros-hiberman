@@ -28,5 +28,5 @@ serde_json = "1"
 sync = { path = "../../platform/crosvm/common/sync" } # provided by ebuild
 sys_util = { path = "../../platform/crosvm/common/sys_util" } # provided by ebuild
 syslog = "4.0.0"
-system_api = { path = "../../platform2/system_api" }
+system_api = { path = "../../platform2/system_api" } # provided by ebuild
 thiserror = "1.0.20"

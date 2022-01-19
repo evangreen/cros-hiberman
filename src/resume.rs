@@ -8,7 +8,7 @@ use std::convert::TryInto;
 use std::io::{Read, Write};
 
 use anyhow::{Context, Result};
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 
 use crate::cookie::set_hibernate_cookie;
 use crate::crypto::{CryptoMode, CryptoReader};
@@ -69,6 +69,10 @@ impl ResumeConductor {
         // cryptohome and save the public portion for a later hibernate.
         if !self.options.test_keys {
             let save_result = self.save_public_key(&mut dbus_connection);
+            if let Err(e) = &save_result {
+                warn!("Failed to save public key: {:?}", e);
+            }
+
             result.and(save_result)
         } else {
             result
@@ -158,7 +162,7 @@ impl ResumeConductor {
         mut hiber_file: DiskFile,
         snap_dev: &mut SnapshotDevice,
         dbus_connection: &'a mut HiberDbusConnection,
-    ) -> Result<Option<PendingResumeCall<'a>>> {
+    ) -> Result<Option<PendingResumeCall>> {
         let page_size = get_page_size();
         let mut image_size = self.metadata.image_size;
         debug!("Resume image is {} bytes", image_size);
@@ -322,7 +326,7 @@ impl ResumeConductor {
         &mut self,
         dbus_connection: &'a mut HiberDbusConnection,
         resume_in_progress: bool,
-    ) -> Result<PendingResumeCall<'a>> {
+    ) -> Result<PendingResumeCall> {
         // Block waiting for seed material from cryptohome.
         let pending_resume_call = dbus_connection.get_seed_material(resume_in_progress)?;
         debug!("Got seed material");
@@ -416,7 +420,7 @@ impl ResumeConductor {
 
     /// Save the public key for future hibernate attempts.
     fn save_public_key(&mut self, dbus_connection: &mut HiberDbusConnection) -> Result<()> {
-        info!("Saving public key for future hibernate");
+        info!("Fetching public key for future hibernate");
         self.populate_seed(dbus_connection, false)?;
         self.key_manager.save_public_key()
     }

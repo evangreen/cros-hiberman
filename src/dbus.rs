@@ -4,7 +4,8 @@
 
 //! Handles the D-Bus interface for hibernate.
 
-use std::sync::{Arc, Barrier};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -28,20 +29,41 @@ const MINIMUM_SEED_SIZE: usize = 32;
 // Define the timeout to connect to the dbus system.
 pub const DEFAULT_DBUS_TIMEOUT: Duration = Duration::from_secs(25);
 
+/// Define the message sent by the d-bus thread to the main thread when the
+/// ResumeFromHibernate d-bus method is called.
+struct ResumeRequest {
+    account_id: String,
+    completion_tx: Sender<u32>,
+}
+
+impl ResumeRequest {
+    pub fn complete(&mut self) {
+        // The message is a dummy, so it doesn't matter if it actually made it
+        // across.
+        let _ = self.completion_tx.send(0);
+    }
+}
+
+impl Drop for ResumeRequest {
+    fn drop(&mut self) {
+        self.complete();
+    }
+}
+
 /// Define the context shared between dbus calls. These must all have the Send
 /// trait.
 struct HibernateDbusStateInternal {
     call_count: u32,
-    account_id: String,
-    barrier: Arc<Barrier>,
+    resume_tx: Sender<ResumeRequest>,
+    stop: bool,
 }
 
 impl HibernateDbusStateInternal {
-    fn new() -> Self {
+    fn new(resume_tx: Sender<ResumeRequest>) -> Self {
         Self {
             call_count: 0,
-            account_id: String::new(),
-            barrier: Arc::new(Barrier::new(2)),
+            resume_tx,
+            stop: false,
         }
     }
 
@@ -49,10 +71,16 @@ impl HibernateDbusStateInternal {
     /// know a user session is about to be started.
     fn resume_from_hibernate(&mut self, account_id: &str) {
         self.call_count += 1;
-        self.account_id = account_id.to_string();
-        // This first wait on the barrier releases the main thread now that the
-        // ResumeFromHibernate call has in fact been called.
-        self.barrier.wait();
+        let (completion_tx, completion_rx) = channel();
+        let _ = self.resume_tx.send(ResumeRequest {
+            account_id: account_id.to_string(),
+            completion_tx,
+        });
+
+        // Wait on the completion channel for the main thread to send something.
+        // It doesn't matter what it is, and on error, just keep going.
+        info!("ResumeFromHibernate: waiting on main thread");
+        let _ = completion_rx.recv();
     }
 }
 
@@ -62,8 +90,10 @@ impl HibernateDbusStateInternal {
 struct HibernateDbusState(Arc<Mutex<HibernateDbusStateInternal>>);
 
 impl HibernateDbusState {
-    fn new() -> Self {
-        HibernateDbusState(Arc::new(Mutex::new(HibernateDbusStateInternal::new())))
+    fn new(resume_tx: Sender<ResumeRequest>) -> Self {
+        HibernateDbusState(Arc::new(Mutex::new(HibernateDbusStateInternal::new(
+            resume_tx,
+        ))))
     }
 }
 
@@ -76,8 +106,9 @@ struct HiberDbusConnectionInternal {
 
 impl HiberDbusConnectionInternal {
     /// Fire up a new system d-bus server.
-    fn new(state: HibernateDbusState) -> Result<Self> {
+    fn new(resume_tx: Sender<ResumeRequest>) -> Result<Self> {
         info!("Setting up dbus");
+        let state = HibernateDbusState::new(resume_tx);
         let conn = Connection::new_system().context("Failed to start local dbus connection")?;
         conn.request_name("org.chromium.Hibernate", false, false, false)
             .context("Failed to request dbus name")?;
@@ -93,20 +124,11 @@ impl HiberDbusConnectionInternal {
                       state: &mut HibernateDbusState,
                       (account_id,): (String,)| {
                     // Here's what happens when the method is called.
-                    let barrier;
-                    // Call the handler function with the lock held. Also grab
-                    // a copy of the barrier to wait with the lock not held.
                     let mut internal_state = state.0.lock();
                     internal_state.resume_from_hibernate(&account_id);
-                    barrier = internal_state.barrier.clone();
-                    drop(internal_state);
-                    info!("ResumeFromHibernate: waiting on main thread");
-                    // Perform the second of two waits on the barrier from the
-                    // dbus thread. The main thread will release this thread
-                    // when it's ok to return from this method and let boot
-                    // proceed. This is done without the state locked so the
-                    // main thread can access the state.
-                    barrier.wait();
+                    // This is currently the only thing the dbus thread is alive
+                    // for, so shut it down after this method call.
+                    internal_state.stop = true;
                     info!("ResumeFromHibernate completing");
                     Ok(())
                 },
@@ -138,9 +160,9 @@ impl HiberDbusConnectionInternal {
             self.conn
                 .process(Duration::from_millis(30000))
                 .context("Failed to process")?;
-            // Break out if the account ID became populated.
+            // Break out if ResumefromHibernate was called.
             let state = self.state.0.lock();
-            if !state.account_id.is_empty() {
+            if state.stop {
                 break;
             }
 
@@ -155,18 +177,18 @@ impl HiberDbusConnectionInternal {
 pub struct HiberDbusConnection {
     internal: Arc<Mutex<HiberDbusConnectionInternal>>,
     thread: Option<thread::JoinHandle<()>>,
-    state: HibernateDbusState,
+    resume_rx: Receiver<ResumeRequest>,
 }
 
 impl HiberDbusConnection {
     /// Create a new dbus connection and announce ourselves on the bus. This
     /// function does not start serving requests yet though.
     pub fn new() -> Result<Self> {
-        let state = HibernateDbusState::new();
+        let (resume_tx, resume_rx) = channel();
         Ok(HiberDbusConnection {
-            internal: Arc::new(Mutex::new(HiberDbusConnectionInternal::new(state.clone())?)),
+            internal: Arc::new(Mutex::new(HiberDbusConnectionInternal::new(resume_tx)?)),
             thread: None,
-            state,
+            resume_rx,
         })
     }
 
@@ -186,25 +208,19 @@ impl HiberDbusConnection {
     /// Block waiting for the seed material to become available from cryptohome,
     /// then return that material.
     pub fn get_seed_material(&mut self, resume_in_progress: bool) -> Result<PendingResumeCall> {
-        let barrier = self.state.0.lock().barrier.clone();
-
-        // This is the first (of two) barrier waits from the main thread, which
-        // blocks until the dbus thread receives a ResumeFromHibernate call.
+        // Block until the dbus thread receives a ResumeFromHibernate call, and
+        // receive that info.
         info!("Waiting for ResumeFromHibernate call");
-        barrier.wait();
+        let mut resume_request = self.resume_rx.recv()?;
 
-        // If there's no resume in progress, do the second barrier wait right
-        // away to unblock the method and the rest of boot.
+        // If there's no resume in progress, unblock boot ASAP.
         if !resume_in_progress {
             info!("Unblocking ResumeFromHibernate immediately");
-            barrier.wait();
+            resume_request.complete();
         }
 
-        // Now grab the state to get the account ID out.
-        info!("Acquiring dbus state");
-        let state = self.state.0.lock();
         info!("Requesting secret seed");
-        let secret_seed = get_secret_seed(state.account_id.to_string())?;
+        let secret_seed = get_secret_seed(&resume_request.account_id)?;
         let length = secret_seed.len();
         if length < MINIMUM_SEED_SIZE {
             return Err(HibernateError::DbusError(format!(
@@ -215,42 +231,25 @@ impl HiberDbusConnection {
         }
 
         info!("Got {} bytes of seed material", length);
-        drop(state);
         Ok(PendingResumeCall {
             secret_seed,
-            dbus_connection: if resume_in_progress { Some(self) } else { None },
+            _resume_request: resume_request,
         })
     }
 }
 
 /// This struct serves as a ticket indicating that the dbus thread is currently
 /// blocked in the ResumeFromHibernate method.
-pub struct PendingResumeCall<'a> {
+pub struct PendingResumeCall {
     pub secret_seed: Vec<u8>,
-    dbus_connection: Option<&'a mut HiberDbusConnection>,
-}
-
-impl Drop for PendingResumeCall<'_> {
-    fn drop(&mut self) {
-        // This is the second barrier wait from the main thread, which releases
-        // the d-bus thread waiting in the ResumeFromHibernate method call.
-        if self.dbus_connection.is_some() {
-            info!("Unblocking pending resume call");
-            self.dbus_connection
-                .as_ref()
-                .unwrap()
-                .state
-                .0
-                .lock()
-                .barrier
-                .wait();
-        }
-    }
+    // When this resume request is dropped, the dbus thread allows the method
+    // call to complete.
+    _resume_request: ResumeRequest,
 }
 
 /// Ask cryptohome for the hibernate seed for the given account. This call only
 /// works once, then cryptohome forgets the secret.
-fn get_secret_seed(account_id: String) -> Result<Vec<u8>> {
+fn get_secret_seed(account_id: &String) -> Result<Vec<u8>> {
     let conn = Connection::new_system().context("Failed to connect to dbus for secret seed")?;
     let conn_path = conn.with_proxy(
         "org.chromium.UserDataAuth",
@@ -260,7 +259,7 @@ fn get_secret_seed(account_id: String) -> Result<Vec<u8>> {
 
     let mut proto: GetHibernateSecretRequest = Message::new();
     let mut account_identifier = AccountIdentifier::new();
-    account_identifier.set_account_id(account_id);
+    account_identifier.set_account_id(account_id.to_string());
     proto.account_id = SingularPtrField::some(account_identifier);
     let response = conn_path
         .get_hibernate_secret(proto.write_to_bytes().unwrap())
